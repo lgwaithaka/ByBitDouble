@@ -1,4 +1,5 @@
 services:
+  # ── MCP Server (Claude Desktop connects here) ─────────────────────────────
   - type: web
     name: bybit-compound-mcp
     runtime: python
@@ -29,14 +30,15 @@ services:
       - key: SMTP_PASS
         sync: false
 
+  # ── Visual Dashboard (open this URL in your browser) ─────────────────────
   - type: web
     name: bybit-compound-dashboard
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn dashboard_api:app --host 0.0.0.0 --port 8080
+    startCommand: uvicorn dashboard_api:app --host 0.0.0.0 --port $PORT
     plan: starter
     disk:
-      name: compound-data    # SAME disk — shared SQLite
+      name: compound-data        # SAME disk name = shared SQLite database
       mountPath: /data
       sizeGB: 1
     envVars:

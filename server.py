@@ -42,6 +42,33 @@ mcp  = FastMCP("Bybit Compound Trader")
 _loop: Optional[asyncio.AbstractEventLoop] = None
 
 
+# ── Root status page (visible in browser at https://your-service.onrender.com/) ──
+@mcp.custom_route("/", methods=["GET"])
+async def root_status(request):
+    """Human-readable status page so the service URL isn't blank."""
+    from starlette.responses import HTMLResponse
+    try:
+        stats = all_time_stats()
+        ce    = engine.compound
+        bal   = engine.balance
+        cs    = ce.get_status(bal)
+        body  = f"""
+        <h2>Bybit Compound Trader — MCP Server</h2>
+        <p><b>Status:</b> {engine.status}</p>
+        <p><b>Epoch:</b> {cs.get('epoch_num','?')} | Day {cs.get('day_in_epoch','?')} of 5</p>
+        <p><b>Mode:</b> {cs.get('mode','?')}</p>
+        <p><b>Balance:</b> ${bal:.4f} | <b>Target:</b> ${cs.get('epoch_target',0):.4f}</p>
+        <p><b>Total Trades:</b> {stats['total_trades']} | <b>Win Rate:</b> {stats['win_rate']}%</p>
+        <p><b>Open Positions:</b> {stats['open_positions']}</p>
+        <hr>
+        <p>MCP endpoint for Claude Desktop: <code>{request.url.scheme}://{request.url.netloc}/mcp</code></p>
+        <p>Dashboard: deploy the <b>bybit-compound-dashboard</b> service from the same repo.</p>
+        """
+    except Exception as e:
+        body = f"<h2>Bybit Compound MCP</h2><p>Engine starting up... ({e})</p><p>MCP endpoint: <code>/mcp</code></p>"
+    return HTMLResponse(f"<html><body style='font-family:monospace;padding:30px'>{body}</body></html>")
+
+
 def _bg():
     global _loop
     _loop = asyncio.new_event_loop()
