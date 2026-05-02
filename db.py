@@ -8,7 +8,27 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 logger  = logging.getLogger(__name__)
-DB_PATH = os.getenv("DB_PATH", "/data/compound.db")
+
+# DB_PATH: use env var, fall back to ./data/compound.db if /data not writable
+_raw_path = os.getenv("DB_PATH", "/data/compound.db")
+def _resolve_db_path(raw: str) -> str:
+    """Pick a writable path — prefers the configured path, falls back to ./data/"""
+    parent = os.path.dirname(raw)
+    try:
+        os.makedirs(parent, exist_ok=True)
+        # Test write access
+        test = os.path.join(parent, ".write_test")
+        with open(test, "w") as f: f.write("x")
+        os.remove(test)
+        return raw
+    except Exception:
+        fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "compound.db")
+        os.makedirs(os.path.dirname(fallback), exist_ok=True)
+        logger.warning(f"Cannot write to {raw}, using fallback: {fallback}")
+        return fallback
+
+DB_PATH = _resolve_db_path(_raw_path)
+logger.info(f"DB_PATH resolved to: {DB_PATH}")
 
 
 def _conn() -> sqlite3.Connection:

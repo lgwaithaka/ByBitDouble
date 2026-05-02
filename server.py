@@ -1,20 +1,38 @@
 """
 server.py — FastMCP Compound Trading Server (port 8000)
+fastmcp 3.x: use transport="http"
 """
-import asyncio, json, os, time, threading, logging
+import asyncio, json, os, time, threading, logging, sys
 from typing import Optional
-from fastmcp import FastMCP
-from engine import engine
-from compound_engine import DAILY_REQUIRED_PCT, EPOCH_DAYS
-from db import (
-    gp, sp, get_open_positions, get_trades, all_time_stats,
-    get_all_epochs, get_capital_log, all_symbol_stats,
-    get_hourly_snaps, all_params, init_db
-)
 
-logging.basicConfig(level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+# Configure logging FIRST so all errors are visible in Render logs
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    stream=sys.stdout
+)
 logger = logging.getLogger(__name__)
+
+# Import with clear error messages
+try:
+    from fastmcp import FastMCP
+    logger.info("fastmcp imported OK")
+except ImportError as e:
+    logger.critical(f"fastmcp import failed: {e}. Run: pip install fastmcp>=3.0.0")
+    sys.exit(1)
+
+try:
+    from engine import engine
+    from compound_engine import DAILY_REQUIRED_PCT, EPOCH_DAYS
+    from db import (
+        gp, sp, get_open_positions, get_trades, all_time_stats,
+        get_all_epochs, get_capital_log, all_symbol_stats,
+        get_hourly_snaps, all_params, init_db
+    )
+    logger.info("All local modules imported OK")
+except ImportError as e:
+    logger.critical(f"Local module import failed: {e}")
+    sys.exit(1)
 
 API_KEY = os.getenv("BYBIT_API_KEY", "")
 API_SEC = os.getenv("BYBIT_API_SECRET", "")
@@ -302,8 +320,23 @@ def project_compound_growth(epochs: int = 15) -> str:
 
 
 if __name__ == "__main__":
-    init_db()
+    # Robust startup — full error logging so Render shows what failed
+    try:
+        init_db()
+        logger.info("DB initialised OK")
+    except Exception as e:
+        logger.error(f"DB init error: {e}")
+
     if API_KEY and API_SEC:
         _ensure()
-        logger.info(f"Auto-starting ({'TESTNET' if TESTNET else 'LIVE'})")
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)
+        mode = "TESTNET" if TESTNET else "LIVE"
+        logger.info(f"Compound engine starting [{mode}]")
+    else:
+        logger.warning(
+            "BYBIT_API_KEY / BYBIT_API_SECRET not set. "
+            "Add them in Render > Environment Variables, then redeploy."
+        )
+
+    # fastmcp 3.x: transport must be 'http' not 'streamable-http'
+    logger.info("FastMCP HTTP server on 0.0.0.0:8000")
+    mcp.run(transport="http", host="0.0.0.0", port=8000)
