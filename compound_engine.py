@@ -247,10 +247,11 @@ class CompoundEngine:
 
         risk = base * mode_mult * streak_mult
 
-        # Hard caps per mode
-        caps = {"CONSERVATIVE": 0.035, "NORMAL": 0.055, "AGGRESSIVE": 0.075, "TURBO": 0.095}
-        risk = min(risk, caps.get(s.mode, 0.055))
-        risk = max(risk, 0.015)   # floor: never risk less than 1.5%
+        # Hard caps per mode — micro-account uses higher % because
+        # absolute dollar amounts are tiny (5% of $10 = $0.50)
+        caps = {"CONSERVATIVE": 0.06, "NORMAL": 0.09, "AGGRESSIVE": 0.12, "TURBO": 0.15}
+        risk = min(risk, caps.get(s.mode, 0.09))
+        risk = max(risk, 0.05)   # floor 5% — needed to hit Bybit minimums on $10
 
         return risk
 
@@ -266,21 +267,21 @@ class CompoundEngine:
     def compute_leverage(self, range_pct: float) -> int:
         """
         Leverage scaled to volatility + mode.
-        More volatile = lower leverage (range protection).
-        Higher mode = slightly more leverage.
+        For micro-accounts ($10): higher base leverage needed so position
+        notional meets Bybit $5 minimum while keeping margin small.
         """
         s = self.state
-        # Base leverage from volatility
-        if   range_pct > 20: base_lev = 8
-        elif range_pct > 12: base_lev = 12
-        elif range_pct > 7:  base_lev = 15
-        elif range_pct > 3:  base_lev = 18
-        else:                base_lev = 20
+        # Base leverage from volatility — higher floor for micro-account
+        if   range_pct > 20: base_lev = 15   # extreme volatile: 15x
+        elif range_pct > 12: base_lev = 18   # high volatile: 18x
+        elif range_pct > 7:  base_lev = 20   # moderate: 20x
+        elif range_pct > 3:  base_lev = 22   # lower volatile: 22x
+        else:                base_lev = 25   # BTC/ETH quiet: 25x max
 
         # Mode boost
-        boosts = {"CONSERVATIVE": -2, "NORMAL": 0, "AGGRESSIVE": 2, "TURBO": 4}
+        boosts = {"CONSERVATIVE": -3, "NORMAL": 0, "AGGRESSIVE": 2, "TURBO": 3}
         lev = base_lev + boosts.get(s.mode, 0)
-        return max(3, min(lev, 25))
+        return max(10, min(lev, 25))   # floor 10x, cap 25x
 
     def compute_sl_tp_mults(self, symbol_sl: float = 1.2, symbol_tp: float = 2.4) -> Tuple[float, float]:
         """

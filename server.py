@@ -346,6 +346,75 @@ def project_compound_growth(epochs: int = 15) -> str:
     }, indent=2)
 
 
+
+@mcp.tool()
+def set_capital(amount: float) -> str:
+    """
+    Set the initial capital and epoch start balance.
+    Use this when starting with a new balance (e.g. 10.0 for $10 USDT).
+    Example: set_capital(10.0)
+    """
+    if amount < 5:
+        return "Minimum capital is $5 USDT (Bybit order minimum constraints)."
+    sp("initial_capital", str(amount))
+    sp("epoch_start_bal", str(amount))
+    sp("epoch_start_ts",  str(int(__import__('time').time())))
+    sp("current_epoch",   "1")
+    # Update compound engine state live if running
+    if engine.running:
+        engine.compound.initialise(
+            start_balance   = amount,
+            epoch_num       = 1,
+            epoch_start_ts  = int(__import__('time').time()),
+            epoch_start_bal = amount,
+        )
+    return (
+        f"Capital set to ${amount:.2f} USDT.\n"
+        f"Epoch 1 target: ${amount * 2:.2f} USDT in 5 days.\n"
+        f"Compound projection:\n"
+        + "\n".join(
+            f"  Epoch {p['epoch']}: ${p['start']:.2f} → ${p['target']:.2f}  (Day {p['days_elapsed']})"
+            for p in engine.compound.project_compounding(amount, 8)
+        )
+    )
+
+
+@mcp.tool()
+def get_micro_status() -> str:
+    """
+    Status report optimised for micro-accounts ($5-$50).
+    Shows balance, positions, what the bot can afford to trade.
+    """
+    bal   = engine.balance
+    min_n = float(gp("min_notional_usdt", "5.5"))
+    ce    = engine.compound
+    pos   = get_open_positions()
+    stats = all_time_stats()
+
+    affordable = []
+    for mode_lev in [10, 15, 20, 25]:
+        margin_needed = min_n / mode_lev
+        if bal >= margin_needed * 1.5:
+            affordable.append(f"  {mode_lev}x leverage → needs ${margin_needed:.2f} margin (✓ affordable)")
+        else:
+            affordable.append(f"  {mode_lev}x leverage → needs ${margin_needed:.2f} margin (✗ too low)")
+
+    return json.dumps({
+        "balance_usdt":        round(bal, 4),
+        "epoch":               ce.state.epoch_num,
+        "epoch_target":        ce.state.epoch_target,
+        "epoch_progress_pct":  round(ce.epoch_progress_pct(bal), 1),
+        "mode":                ce.state.mode,
+        "open_positions":      len(pos),
+        "max_concurrent":      gp("max_concurrent", "3"),
+        "bybit_min_notional":  min_n,
+        "leverage_affordability": affordable,
+        "total_pnl":           stats["total_pnl"],
+        "win_rate":            stats["win_rate"],
+        "positions":           pos,
+    }, indent=2, default=str)
+
+
 if __name__ == "__main__":
     # Robust startup — full error logging so Render shows what failed
     try:

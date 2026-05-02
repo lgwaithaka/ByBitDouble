@@ -159,19 +159,21 @@ def init_db():
     """)
     c.commit()
 
-    # Seed default params
+    # Seed default params — tuned for $10 micro-account
     defaults = {
-        "initial_capital":    "100.0",
+        "initial_capital":    "10.0",     # $10 starting balance
         "epoch_days":         "5",
         "epoch_multiplier":   "2.0",
-        "epoch_max_dd_pct":   "30",       # epoch-level circuit breaker
-        "daily_max_dd_pct":   "20",       # daily circuit breaker
-        "vol_scan_n":         "14",
-        "scan_interval_s":    "40",
+        "epoch_max_dd_pct":   "35",       # slightly wider DD tolerance at micro scale
+        "daily_max_dd_pct":   "25",
+        "vol_scan_n":         "10",       # fewer symbols = better focus at small size
+        "scan_interval_s":    "45",
         "start_ts":           str(int(time.time())),
         "current_epoch":      "1",
         "epoch_start_ts":     str(int(time.time())),
-        "epoch_start_bal":    "100.0",
+        "epoch_start_bal":    "10.0",
+        "min_notional_usdt":  "5.5",      # Bybit minimum ~$5, we use $5.5 buffer
+        "max_concurrent":     "3",        # max 3 trades at once on $10
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO params (key,value,updated_ts) VALUES (?,?,?)",

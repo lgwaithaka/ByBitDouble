@@ -144,18 +144,39 @@ class CompoundTradingEngine:
         )
         leverage = ce.compute_leverage(meta.get("range_pct", 5.0))
 
-        # Position size
+        # Position size — micro-account safe sizing
         risk_pct = ce.compute_risk_pct()
         risk_usd = self.balance * risk_pct
         sl_dist  = atr_val * sl_mult if atr_val > 0 else price * 0.009
         qty      = (risk_usd * leverage) / price
         qty      = max(qty, 0.001)
 
-        # Cap single-trade notional at 35% of balance
-        max_notional = self.balance * 0.35 * leverage
+        # Bybit minimum notional check ($5.5 USDT minimum order value)
+        min_notional = float(gp("min_notional_usdt", "5.5"))
+        if qty * price < min_notional:
+            # Bump qty up to meet minimum — use leverage to keep margin small
+            qty = (min_notional * 1.05) / price   # 5% buffer over minimum
+
+        # Cap single-trade notional at 40% of balance * leverage
+        # For $10: max notional = $10 * 0.40 * 15x = $60 (margin used = $4)
+        max_notional = self.balance * 0.40 * leverage
         if qty * price > max_notional:
             qty = max_notional / price
-        qty = round(qty, 3)
+
+        # Round to correct precision for the asset price
+        if price >= 1000:
+            qty = round(qty, 3)
+        elif price >= 1:
+            qty = round(qty, 2)
+        else:
+            qty = round(qty, 0)  # e.g. SHIB, very small price = whole units
+            qty = max(qty, 1)
+
+        # Final sanity: if balance too low to meet minimum, skip trade
+        required_margin = (min_notional) / leverage
+        if self.balance < required_margin * 1.5:
+            logger.warning(f"Balance ${self.balance:.2f} too low for {symbol} minimum order. Skipping.")
+            return False
 
         side = "Buy" if signal == "LONG" else "Sell"
         sl, tp = sl_tp(side, price, atr_val, sl_mult, tp_mult)

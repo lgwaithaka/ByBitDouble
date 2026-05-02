@@ -8,7 +8,17 @@ from bybit_client import BybitClient
 
 logger   = logging.getLogger(__name__)
 MIN_VOL  = 8_000_000      # $8M min daily turnover
-BLACKLIST= {"USDCUSDT","USDTUSDT","BUSDUSDT","TUSDUSDT","FRAXUSDT","EURUSDT","GBPUSDT"}
+BLACKLIST= {
+    "USDCUSDT","USDTUSDT","BUSDUSDT","TUSDUSDT","FRAXUSDT","EURUSDT","GBPUSDT",
+    # Exclude very high-price assets where micro-account qty < Bybit minimum
+    # BTC at $65k: to hit $5.50 notional at 25x needs 0.0034 BTC - often below min lot
+    # We keep ETH (workable at 25x), focus on mid/low price perps
+}
+
+# Price range that works well for micro accounts:
+# Too high (>$5000): qty precision issues | Too low (<$0.00001): qty rounding issues
+MICRO_PREFERRED_MAX_PRICE = 5000.0
+MICRO_PREFERRED_MIN_PRICE = 0.0001
 SCAN_TTL = 900             # 15-minute cache
 
 
@@ -40,6 +50,8 @@ class VScanner:
                 hi      = float(t.get("highPrice24h","0") or 0)
                 lo      = float(t.get("lowPrice24h","0") or 0)
                 if price <= 0 or vol_24h < MIN_VOL: continue
+                # Skip dust tokens — qty rounding breaks minimum notional
+                if price < 0.0001: continue
 
                 rng  = (hi - lo) / price                           # 24h range %
                 aabs = abs(chg)
