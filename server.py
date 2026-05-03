@@ -113,21 +113,33 @@ def stop_trading() -> str:
 
 @mcp.tool()
 def get_status() -> str:
-    """Full engine status: epoch, mode, balance, circuit breakers, streak."""
+    """Full engine status: live balance, epoch, mode, circuit breakers, streak."""
     ce    = engine.compound
     bal   = engine.balance
     stats = all_time_stats()
-    return json.dumps({
-        "engine":      engine.status,
-        "testnet":     TESTNET,
-        "balance_est": round(bal, 4),
-        "compound":    ce.get_status(bal),
-        "performance": stats,
+    initial = float(gp("initial_capital","0") or "0")
+    epoch_bal = float(gp("epoch_start_bal","0") or "0")
+
+    status = {
+        "engine":       engine.status,
+        "testnet":      TESTNET,
+        "live_balance": round(bal, 4),
+        "initial_capital": round(initial, 4),
+        "epoch_start_bal": round(epoch_bal, 4),
+        "capital_source": (
+            "AUTO-DETECTED from Bybit" if not engine.capital_auto_detected and initial > 0
+            else "PENDING — engine fetching live balance from Bybit..."
+            if engine.capital_auto_detected
+            else "NOT SET — check API keys and Bybit Unified Trading Account"
+        ),
+        "compound":     ce.get_status(bal),
+        "performance":  stats,
         "last_scan_ago_s": int(time.time()) - engine.last_scan_ts if engine.last_scan_ts else None,
         "recent_signals":  engine.scan_results[-8:],
         "cooldowns":       {k: max(0, round(v-time.time())) for k, v in engine.cooldown_until.items() if v > time.time()},
         "errors":          engine.errors[-5:],
-    }, indent=2, default=str)
+    }
+    return json.dumps(status, indent=2, default=str)
 
 
 @mcp.tool()
@@ -347,34 +359,145 @@ def project_compound_growth(epochs: int = 15) -> str:
 
 
 
+
+@mcp.tool()
+def check_bybit_connection() -> str:
+    """
+    DIAGNOSTIC TOOL — Run this first if balance shows 0.
+    Tests the Bybit API connection, shows balance across ALL account types,
+    confirms testnet/live mode, checks API key permissions.
+    """
+    if not engine.client:
+        return "Engine not initialised. Call start_trading first."
+
+    async def _diag():
+        import time as _time
+        out = {}
+
+        # 1. Basic connectivity
+        try:
+            ticker = await engine.client._get("/v5/market/tickers",
+                {"category": "linear", "symbol": "BTCUSDT"}, auth=False)
+            price = ticker.get("result",{}).get("list",[{}])[0].get("lastPrice","?")
+            out["connectivity"] = f"OK — BTCUSDT price: ${price}"
+        except Exception as e:
+            out["connectivity"] = f"FAILED: {e}"
+
+        # 2. API key mode
+        out["mode"]     = "TESTNET" if engine.client.base == "https://api-testnet.bybit.com" else "LIVE"
+        out["base_url"] = engine.client.base
+        out["api_key_prefix"] = engine.client.api_key[:8] + "..." if engine.client.api_key else "NOT SET"
+
+        # 3. All account balances
+        try:
+            all_bals = await engine.client.wallet_all_types()
+            out["account_balances"] = all_bals
+        except Exception as e:
+            out["account_balances"] = f"Error: {e}"
+
+        # 4. Account info (shows if unified trading enabled)
+        try:
+            acct = await engine.client.account_info()
+            info = acct.get("result", {})
+            out["account_info"] = {
+                "unifiedMarginStatus": info.get("unifiedMarginStatus"),
+                "marginMode":          info.get("marginMode"),
+                "accountType":         info.get("accountType"),
+                "dcpStatus":           info.get("dcpStatus"),
+                "retCode":             acct.get("retCode"),
+                "retMsg":              acct.get("retMsg"),
+            }
+        except Exception as e:
+            out["account_info"] = f"Error: {e}"
+
+        # 5. Recommendation
+        rec = []
+        if out["mode"] == "TESTNET":
+            rec.append("ISSUE: Still on TESTNET. Set BYBIT_TESTNET=false in Render env vars and redeploy.")
+        if not engine.client.api_key:
+            rec.append("ISSUE: BYBIT_API_KEY not set in Render environment variables.")
+        bals = out.get("account_balances", {})
+        if isinstance(bals, dict):
+            has_funds = any(
+                float(v.get("totalWalletBalance","0") or "0") > 0
+                for v in bals.values() if isinstance(v, dict) and "error" not in v
+            )
+            if not has_funds:
+                rec.append("ISSUE: Zero balance across all account types. Check:")
+                rec.append("  1. Bybit → Assets → make sure funds are in Unified Trading (not Funding)")
+                rec.append("  2. API key has 'Unified Trading Read' permission")
+                rec.append("  3. Transfer: Bybit Assets > Transfer > Funding → Unified Trading")
+        out["recommendations"] = rec if rec else ["All looks good! Call refresh_balance then get_status."]
+        return out
+
+    if _loop:
+        result = asyncio.run_coroutine_threadsafe(_diag(), _loop).result(20)
+        return json.dumps(result, indent=2, default=str)
+    return "Engine loop not running. Call start_trading first."
+
+
+@mcp.tool()
+def refresh_balance() -> str:
+    """Force an immediate balance refresh from Bybit and return the result."""
+    if not engine.client:
+        return "Engine not initialised."
+    if _loop:
+        bal = asyncio.run_coroutine_threadsafe(engine.refresh_balance(), _loop).result(15)
+        sp("epoch_start_bal", str(round(bal, 4)))
+        return (
+            f"Live Balance: ${bal:.4f} USDT\n"
+            f"Epoch Target: ${engine.compound.state.epoch_target:.4f} USDT\n"
+            f"Mode: {engine.compound.state.mode}"
+        )
+    return "Engine loop not running."
+
+
 @mcp.tool()
 def set_capital(amount: float) -> str:
     """
-    Set the initial capital and epoch start balance.
-    Use this when starting with a new balance (e.g. 10.0 for $10 USDT).
+    Manually override the capital amount.
+    Normally the engine auto-detects this from your live Bybit balance on startup.
+    Only use this if auto-detection failed or you want to reset the epoch.
     Example: set_capital(10.0)
     """
     if amount < 5:
-        return "Minimum capital is $5 USDT (Bybit order minimum constraints)."
-    sp("initial_capital", str(amount))
-    sp("epoch_start_bal", str(amount))
-    sp("epoch_start_ts",  str(int(__import__('time').time())))
+        return "Minimum capital is $5 USDT (Bybit minimum order size constraints)."
+    import time as _t
+    sp("initial_capital", str(round(amount, 4)))
+    sp("epoch_start_bal", str(round(amount, 4)))
+    sp("epoch_start_ts",  str(int(_t.time())))
     sp("current_epoch",   "1")
-    # Update compound engine state live if running
+
+    # Adjust operational params to balance size
+    if amount < 20:
+        sp("min_notional_usdt","5.5"); sp("max_concurrent","3"); sp("vol_scan_n","8")
+    elif amount < 100:
+        sp("min_notional_usdt","5.5"); sp("max_concurrent","5"); sp("vol_scan_n","10")
+    elif amount < 500:
+        sp("min_notional_usdt","10.0"); sp("max_concurrent","8"); sp("vol_scan_n","12")
+    else:
+        sp("min_notional_usdt","20.0"); sp("max_concurrent","12"); sp("vol_scan_n","14")
+
     if engine.running:
+        engine.balance = amount
+        engine.capital_auto_detected = False
         engine.compound.initialise(
             start_balance   = amount,
             epoch_num       = 1,
-            epoch_start_ts  = int(__import__('time').time()),
+            epoch_start_ts  = int(_t.time()),
             epoch_start_bal = amount,
         )
+    from db import open_epoch_record
+    open_epoch_record(1, amount)
+
+    proj = engine.compound.project_compounding(amount, 8)
     return (
-        f"Capital set to ${amount:.2f} USDT.\n"
-        f"Epoch 1 target: ${amount * 2:.2f} USDT in 5 days.\n"
+        f"Capital manually set to ${amount:.4f} USDT\n"
+        f"Epoch 1 target: ${amount * 2:.4f} USDT in 5 days\n\n"
         f"Compound projection:\n"
         + "\n".join(
             f"  Epoch {p['epoch']}: ${p['start']:.2f} → ${p['target']:.2f}  (Day {p['days_elapsed']})"
-            for p in engine.compound.project_compounding(amount, 8)
+            for p in proj
         )
     )
 
@@ -412,6 +535,48 @@ def get_micro_status() -> str:
         "total_pnl":           stats["total_pnl"],
         "win_rate":            stats["win_rate"],
         "positions":           pos,
+    }, indent=2, default=str)
+
+
+
+@mcp.tool()
+def get_regime_status() -> str:
+    """Get current market regime (TRENDING/RANGING/VOLATILE) and strategy adjustments."""
+    regime = engine.regime
+    adj    = regime.adjustments()
+    return json.dumps({
+        "regime":           regime.regime,
+        "label":            adj["label"],
+        "trend_strength":   round(regime.trend_strength, 5),
+        "volatility_pct":   round(regime.volatility_pct, 2),
+        "last_updated":     regime.last_updated,
+        "adjustments":      adj,
+        "conf_bonus":       adj["conf_bonus"],
+        "losing_symbols":   list(engine.losing_symbols),
+        "cooldowns":        {k: max(0,round(v-time.time())) for k,v in engine.cooldown_until.items() if v>time.time()},
+        "hourly_pnl":       gp("hourly_pnl","0"),
+        "hourly_win_rate":  gp("hourly_win_rate","0"),
+        "last_strategy_ts": gp("last_strategy_ts","0"),
+    }, indent=2)
+
+
+@mcp.tool()
+def get_diversification_status() -> str:
+    """Show open positions by asset class and diversification health."""
+    from engine import get_asset_class
+    pos    = get_open_positions()
+    by_class = {}
+    for p in pos:
+        cls = get_asset_class(p["symbol"])
+        by_class[cls] = by_class.get(cls, []) + [p["symbol"]]
+    return json.dumps({
+        "open_positions":     len(pos),
+        "by_asset_class":     by_class,
+        "losing_symbols":     list(engine.losing_symbols),
+        "blocked_from_open":  list(engine.losing_symbols),
+        "cooldowns":          {k: max(0,round(v-time.time())) for k,v in engine.cooldown_until.items() if v>time.time()},
+        "max_concurrent":     engine.compound.compute_max_concurrent(),
+        "positions":          pos,
     }, indent=2, default=str)
 
 

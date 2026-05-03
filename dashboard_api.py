@@ -49,12 +49,17 @@ async def overview():
     est    = initial + stats["total_pnl"]
     ce     = _ce
     return JSONResponse({
-        "stats":         stats,
-        "compound":      ce.get_status(est),
-        "est_balance":   round(est, 4),
-        "initial":       initial,
-        "epoch_history": epochs,
-        "projection":    ce.project_compounding(ce.state.epoch_start_bal, 10),
+        "stats":            stats,
+        "compound":         ce.get_status(est),
+        "est_balance":      round(est, 4),
+        "initial":          initial,
+        "epoch_history":    epochs,
+        "projection":       ce.project_compounding(ce.state.epoch_start_bal, 10),
+        "market_regime":    gp("market_regime",    "RANGING"),
+        "regime_label":     gp("regime_label",     ""),
+        "hourly_win_rate":  gp("hourly_win_rate",  "0"),
+        "hourly_pnl":       gp("hourly_pnl",       "0"),
+        "last_strategy_ts": gp("last_strategy_ts", "0"),
     })
 
 

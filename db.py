@@ -159,30 +159,32 @@ def init_db():
     """)
     c.commit()
 
-    # Seed default params — tuned for $10 micro-account
+    # Seed default params
+    # initial_capital and epoch_start_bal are seeded as 0.0
+    # and auto-updated on first startup from the real Bybit balance.
     defaults = {
-        "initial_capital":    "10.0",     # $10 starting balance
+        "initial_capital":    "0.0",      # auto-set from Bybit on first run
         "epoch_days":         "5",
         "epoch_multiplier":   "2.0",
-        "epoch_max_dd_pct":   "35",       # slightly wider DD tolerance at micro scale
+        "epoch_max_dd_pct":   "35",
         "daily_max_dd_pct":   "25",
-        "vol_scan_n":         "10",       # fewer symbols = better focus at small size
+        "vol_scan_n":         "10",       # auto-adjusted based on balance size
         "scan_interval_s":    "45",
         "start_ts":           str(int(time.time())),
         "current_epoch":      "1",
         "epoch_start_ts":     str(int(time.time())),
-        "epoch_start_bal":    "10.0",
-        "min_notional_usdt":  "5.5",      # Bybit minimum ~$5, we use $5.5 buffer
-        "max_concurrent":     "3",        # max 3 trades at once on $10
+        "epoch_start_bal":    "0.0",      # auto-set from Bybit on first run
+        "min_notional_usdt":  "5.5",      # Bybit minimum order value
+        "max_concurrent":     "5",        # auto-adjusted based on balance size
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO params (key,value,updated_ts) VALUES (?,?,?)",
                   (k, v, int(time.time())))
     c.commit()
 
-    # Seed epoch 1 if not exists
+    # Epoch 1 seeded with 0.0 — real balance filled in by engine on first startup
     c.execute("INSERT OR IGNORE INTO epochs (epoch_num,start_ts,start_bal,target_bal) VALUES (?,?,?,?)",
-              (1, int(time.time()), 100.0, 200.0))
+              (1, int(time.time()), 0.0, 0.0))
     c.commit(); c.close()
     logger.info(f"DB ready: {DB_PATH}")
 

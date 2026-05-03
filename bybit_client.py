@@ -88,8 +88,39 @@ class BybitClient:
             {"category":"linear","symbol":sym}, auth=False)
 
     # ── Account ──────────────────────────────────────────────────────────────
-    async def wallet(self):
-        return await self._get("/v5/account/wallet-balance", {"accountType":"UNIFIED"})
+    async def wallet(self, account_type: str = "UNIFIED"):
+        """Query wallet balance. accountType: UNIFIED | CONTRACT | SPOT"""
+        return await self._get("/v5/account/wallet-balance", {"accountType": account_type})
+
+    async def wallet_all_types(self) -> dict:
+        """Try all account types and return balances for each."""
+        results = {}
+        for at in ["UNIFIED", "CONTRACT", "SPOT"]:
+            try:
+                r = await self._get("/v5/account/wallet-balance", {"accountType": at})
+                accs = r.get("result", {}).get("list", [])
+                for acc in accs:
+                    total = acc.get("totalWalletBalance", "0") or "0"
+                    avail = acc.get("totalAvailableBalance", "0") or "0"
+                    results[at] = {
+                        "totalWalletBalance":     total,
+                        "totalAvailableBalance":  avail,
+                        "coins": [
+                            {"coin": c.get("coin"), "walletBalance": c.get("walletBalance"),
+                             "availableToWithdraw": c.get("availableToWithdraw")}
+                            for c in acc.get("coin", [])
+                            if float(c.get("walletBalance", "0") or "0") > 0
+                        ],
+                        "retCode": r.get("retCode"),
+                        "retMsg":  r.get("retMsg"),
+                    }
+            except Exception as e:
+                results[at] = {"error": str(e)}
+        return results
+
+    async def account_info(self) -> dict:
+        """Get account type info — shows if unified trading is enabled."""
+        return await self._get("/v5/account/info", {})
     async def positions(self, sym=None):
         p = {"category":"linear","settleCoin":"USDT","limit":"50"}
         if sym: p["symbol"] = sym

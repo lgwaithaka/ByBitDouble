@@ -1,79 +1,179 @@
 """
-engine.py — Perpetual Compounding Trading Engine
-Doubles every 5-day epoch, indefinitely. Adapts aggression to epoch progress.
+engine.py v2 — Perpetual Compounding Trading Engine
+New features:
+  • 3%+ unrealised profit → close immediately (take profits)
+  • Trailing stop: move SL to breakeven at 2%, trail at 1.5x ATR above 5%
+  • Diversification: max 1 position per asset class, never add to a loser
+  • Hourly market regime: TRENDING | RANGING | VOLATILE → adjusts strategy live
+  • No upward profit cap — trailing stop lets winners run forever
 """
 import asyncio, json, os, time, logging, smtplib, threading
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 
-from bybit_client   import BybitClient
-from scanner        import VScanner, parse_klines, atr, p_funding, p_ls, p_oi, p_ob, p_liq, price_precision
-from signals        import SignalEngine, sl_tp
+from bybit_client    import BybitClient
+from scanner         import VScanner, parse_klines, atr, p_funding, p_ls, p_oi, p_ob, p_liq, price_precision
+from signals         import SignalEngine, sl_tp
 from compound_engine import CompoundEngine, DAILY_REQUIRED_PCT, EPOCH_DAYS
 from db import (
     init_db, gp, sp, open_trade, close_trade, update_pos_price,
     get_open_positions, get_trades, all_time_stats, log_capital,
     get_symbol_stats, snap_hour, close_epoch_record, open_epoch_record,
-    get_all_epochs, get_hourly_snaps, all_time_stats
+    get_all_epochs
 )
 
 logger = logging.getLogger(__name__)
 REPORT_EMAIL = os.getenv("REPORT_EMAIL", "lgwaithaka@gmail.com")
-SMTP_HOST    = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT    = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER    = os.getenv("SMTP_USER", "")
-SMTP_PASS    = os.getenv("SMTP_PASS", "")
+SMTP_HOST    = os.getenv("SMTP_HOST",    "smtp.gmail.com")
+SMTP_PORT    = int(os.getenv("SMTP_PORT","587"))
+SMTP_USER    = os.getenv("SMTP_USER",    "")
+SMTP_PASS    = os.getenv("SMTP_PASS",    "")
+
+# ── Asset class groupings ─────────────────────────────────────────────────────
+ASSET_CLASSES = {
+    "BTC":   ["BTCUSDT"],
+    "ETH":   ["ETHUSDT","ETHFIUSDT","WETHUSDT"],
+    "SOL":   ["SOLUSDT"],
+    "BNB":   ["BNBUSDT"],
+    "DOGE":  ["DOGEUSDT"],
+    "XRP":   ["XRPUSDT"],
+    "AVAX":  ["AVAXUSDT"],
+    "LINK":  ["LINKUSDT"],
+    "ADA":   ["ADAUSDT"],
+    "MEME":  ["PEPEUSDT","SHIBUSDT","FLOKIUSDT","WIFUSDT","BONKUSDT","POPCATUSDT"],
+    "LAYER2":["ARBUSDT","OPUSDT","MATICUSDT","STRKUSDT"],
+    "DEFI":  ["UNIUSDT","AAVEUSDT","CRVUSDT","MKRUSDT"],
+    "OTHER": [],
+}
+
+def get_asset_class(symbol: str) -> str:
+    for cls, syms in ASSET_CLASSES.items():
+        if symbol in syms: return cls
+    for cls in ["BTC","ETH","SOL","BNB","DOGE","XRP","AVAX","LINK","ADA"]:
+        if symbol.startswith(cls): return cls
+    return "OTHER"
+
+
+class MarketRegime:
+    TRENDING = "TRENDING"
+    RANGING  = "RANGING"
+    VOLATILE = "VOLATILE"
+
+    def __init__(self):
+        self.regime         = self.RANGING
+        self.trend_strength = 0.0
+        self.volatility_pct = 0.0
+        self.last_updated   = 0
+
+    def update(self, klines_dict: Dict[str, np.ndarray]):
+        from scanner import ema as _ema
+        trend_vals, range_vals = [], []
+        for sym, k in klines_dict.items():
+            if k is None or len(k) < 22: continue
+            closes = k[:, 4]; highs = k[:, 2]; lows = k[:, 3]
+            price  = float(closes[-1])
+            if price <= 0: continue
+            e8  = _ema(closes, 8)
+            e21 = _ema(closes, 21)
+            slope = abs((e8[-1] - e8[-5]) / (e8[-5] + 1e-9))
+            trend_vals.append(slope)
+            rng = (highs[-10:].max() - lows[-10:].min()) / price
+            range_vals.append(float(rng))
+
+        if not trend_vals: return
+        avg_trend = float(np.mean(trend_vals))
+        avg_range = float(np.mean(range_vals))
+        self.trend_strength = avg_trend
+        self.volatility_pct = avg_range * 100
+
+        if avg_range > 0.065:     self.regime = self.VOLATILE
+        elif avg_trend > 0.0025:  self.regime = self.TRENDING
+        else:                     self.regime = self.RANGING
+        self.last_updated = int(time.time())
+        logger.info(f"Regime: {self.regime} | trend={avg_trend:.5f} | range={avg_range*100:.2f}%")
+
+    def adjustments(self) -> Dict:
+        if self.regime == self.TRENDING:
+            return {"conf_bonus":-3, "tp_bonus":0.6, "sl_bonus":-0.1, "lev_bonus":2,
+                    "label":"TRENDING — momentum entries, let winners run"}
+        elif self.regime == self.VOLATILE:
+            return {"conf_bonus":+5, "tp_bonus":-0.4, "sl_bonus":0.3, "lev_bonus":-3,
+                    "label":"VOLATILE — selective entries, wider stops, quick TP"}
+        else:
+            return {"conf_bonus":+2, "tp_bonus":-0.2, "sl_bonus":0.0, "lev_bonus":0,
+                    "label":"RANGING — mean-reversion, tighter targets"}
 
 
 class CompoundTradingEngine:
     def __init__(self):
-        self.client:  Optional[BybitClient]     = None
-        self.scanner: Optional[VScanner]        = None
-        self.signals  = SignalEngine()
-        self.compound = CompoundEngine()
+        self.client:   Optional[BybitClient]    = None
+        self.scanner:  Optional[VScanner]       = None
+        self.signals   = SignalEngine()
+        self.compound  = CompoundEngine()
+        self.regime    = MarketRegime()
 
-        self.running       = False
-        self.status        = "IDLE"
-        self.balance       = 0.0
-        self.live_positions: Dict[str, Dict]    = {}
-        self.cooldown_until: Dict[str, float]   = {}   # symbol → ts
+        self.running        = False
+        self.status         = "IDLE"
+        self.balance               = 0.0
+        self.capital_auto_detected = False   # True until real balance confirmed from Bybit
+        self.live_positions: Dict[str, Dict]   = {}
+        self.cooldown_until: Dict[str, float]  = {}
+        self.losing_symbols: Set[str]          = set()
+        self._klines_cache: Dict[str, np.ndarray] = {}
 
-        self.scan_results: List[Dict]           = []
+        self.scan_results: List[Dict] = []
         self.last_scan_ts  = 0
         self.last_hour_ts  = 0
-        self.last_daily_ts = 0
-        self.errors: List[str]                  = []
+        self.errors: List[str] = []
 
     def init(self, api_key: str, api_secret: str, testnet: bool = False):
         self.client  = BybitClient(api_key, api_secret, testnet)
         self.scanner = VScanner(self.client)
         init_db()
 
-        # Restore epoch state from DB
-        epoch_num  = int(gp("current_epoch", "1"))
-        epoch_ts   = int(gp("epoch_start_ts", str(int(time.time()))))
-        epoch_bal  = float(gp("epoch_start_bal", "100.0"))
-        initial    = float(gp("initial_capital", "100.0"))
+        epoch_num = int(gp("current_epoch",  "1"))
+        epoch_ts  = int(gp("epoch_start_ts", str(int(time.time()))))
 
-        self.compound.initialise(
-            start_balance   = initial,
-            epoch_num       = epoch_num,
-            epoch_start_ts  = epoch_ts,
-            epoch_start_bal = epoch_bal,
-        )
-        logger.info(f"Engine init | Epoch {epoch_num} | start=${epoch_bal:.2f}")
+        # Determine if this is a fresh first run (no capital seeded yet)
+        saved_initial = gp("initial_capital", None)
+        saved_epoch   = gp("epoch_start_bal", None)
+        first_run     = (saved_initial is None or saved_initial == "10.0"
+                         or saved_epoch  is None or saved_epoch  == "10.0")
+
+        if first_run:
+            # Will be updated in main_loop after async balance fetch
+            logger.info("Fresh start — will auto-detect balance from Bybit on first loop")
+            self.balance = 0.0
+            self.capital_auto_detected = True
+        else:
+            self.balance = float(saved_epoch)
+            self.capital_auto_detected = False
+
+        epoch_bal = float(saved_epoch or "0.0")
+        initial   = float(saved_initial or "0.0")
+        self.compound.initialise(initial or epoch_bal or 10.0,
+                                 epoch_num, epoch_ts,
+                                 epoch_bal or 10.0)
+        logger.info(f"Engine init | Epoch {epoch_num} | saved_bal=${epoch_bal:.4f} | auto_detect={self.capital_auto_detected}")
 
     # ── Balance ──────────────────────────────────────────────────────────────
 
     async def refresh_balance(self) -> float:
         try:
-            resp = await self.client.wallet()
-            for acc in resp.get("result", {}).get("list", []):
-                b = acc.get("totalWalletBalance")
-                if b:
-                    self.balance = float(b); return self.balance
+            for at in ["UNIFIED", "CONTRACT"]:
+                resp = await self.client.wallet(at)
+                if resp.get("retCode", -1) != 0: continue
+                for acc in resp.get("result", {}).get("list", []):
+                    v = float(acc.get("totalWalletBalance", "0") or "0")
+                    if v > 0:
+                        self.balance = v; return v
+                    for coin in acc.get("coin", []):
+                        if coin.get("coin") == "USDT":
+                            cv = float(coin.get("walletBalance","0") or "0")
+                            if cv > 0:
+                                self.balance = cv; return cv
         except Exception as e:
             logger.error(f"refresh_balance: {e}")
         return self.balance
@@ -83,13 +183,13 @@ class CompoundTradingEngine:
             resp = await self.client.positions()
             self.live_positions = {
                 p["symbol"]: p
-                for p in resp.get("result", {}).get("list", [])
-                if float(p.get("size", "0")) > 0
+                for p in resp.get("result",{}).get("list",[])
+                if float(p.get("size","0")) > 0
             }
         except Exception as e:
             logger.error(f"refresh_live_positions: {e}")
 
-    # ── Market Data ──────────────────────────────────────────────────────────
+    # ── Fetch Market Data ─────────────────────────────────────────────────────
 
     async def fetch_data(self, symbol: str) -> Optional[Dict]:
         try:
@@ -105,22 +205,126 @@ class CompoundTradingEngine:
                 self.client.liquidations(symbol),
                 return_exceptions=True
             )
-            k3, k5, k15, k1h, fr, lsr, oi, ob, liq = results
+            k3,k5,k15,k1h,fr,lsr,oi,ob,liq = results
+            k5p = parse_klines(k5) if not isinstance(k5, Exception) else None
+            if k5p is not None:
+                self._klines_cache[symbol] = k5p
             return {
-                "k3m":  parse_klines(k3)   if not isinstance(k3,  Exception) else None,
-                "k5m":  parse_klines(k5)   if not isinstance(k5,  Exception) else None,
-                "k15m": parse_klines(k15)  if not isinstance(k15, Exception) else None,
-                "k1h":  parse_klines(k1h)  if not isinstance(k1h, Exception) else None,
-                "funding":  p_funding(fr)  if not isinstance(fr,  Exception) else 0.0,
-                "ls":       p_ls(lsr)      if not isinstance(lsr, Exception) else 1.0,
-                "oi_pct":   p_oi(oi)       if not isinstance(oi,  Exception) else 0.0,
-                "ob_imb":   p_ob(ob)       if not isinstance(ob,  Exception) else 1.0,
-                "liqs":     p_liq(liq)     if not isinstance(liq, Exception) else {},
+                "k3m":  parse_klines(k3)  if not isinstance(k3,  Exception) else None,
+                "k5m":  k5p,
+                "k15m": parse_klines(k15) if not isinstance(k15, Exception) else None,
+                "k1h":  parse_klines(k1h) if not isinstance(k1h, Exception) else None,
+                "funding": p_funding(fr)  if not isinstance(fr,  Exception) else 0.0,
+                "ls":      p_ls(lsr)      if not isinstance(lsr, Exception) else 1.0,
+                "oi_pct":  p_oi(oi)       if not isinstance(oi,  Exception) else 0.0,
+                "ob_imb":  p_ob(ob)       if not isinstance(ob,  Exception) else 1.0,
+                "liqs":    p_liq(liq)     if not isinstance(liq, Exception) else {},
             }
         except Exception as e:
             logger.error(f"fetch_data {symbol}: {e}"); return None
 
-    # ── Execution ────────────────────────────────────────────────────────────
+    # ── 3% Profit Taking + Trailing Stop (No Upper Limit) ────────────────────
+
+    async def check_profit_targets(self):
+        db_open = get_open_positions()
+        initial = float(gp("epoch_start_bal","0.0") or "0.0") or self.balance or 10.0
+
+        for pos in db_open:
+            sym      = pos["symbol"]
+            entry    = float(pos.get("entry_price", 0) or 0)
+            qty      = float(pos.get("qty",         0) or 0)
+            side     = pos.get("side", "Buy")
+            trade_id = pos.get("trade_id")
+            unr      = float(pos.get("unrealised_pnl", 0) or 0)
+            cur      = float(pos.get("current_price",  0) or 0)
+
+            if entry <= 0 or qty <= 0 or cur <= 0: continue
+            notional = entry * qty
+            unr_pct  = (unr / notional * 100) if notional > 0 else 0
+
+            # ─ Take profit at 3%+ ─────────────────────────────────────────
+            if unr_pct >= 3.0:
+                logger.info(f"TAKE PROFIT | {sym} +{unr_pct:.2f}% | ${unr:.4f}")
+                try:
+                    resp = await self.client.close_pos(sym, side, str(qty))
+                    if resp.get("retCode",-1) == 0:
+                        await asyncio.sleep(0.5)
+                        pr  = await self.client.closed_pnl(sym, 5)
+                        pls = pr.get("result",{}).get("list",[])
+                        pnl    = float(pls[0].get("closedPnl",   "0") or "0") if pls else unr
+                        exit_p = float(pls[0].get("avgExitPrice","0") or "0") if pls else cur
+                        close_trade(trade_id, exit_p, pnl, initial)
+                        self.compound.record_outcome(pnl > 0, pnl, self.balance)
+                        self.cooldown_until[sym] = time.time() + 30
+                        logger.info(f"PROFIT BANKED | {sym} | ${pnl:.4f}")
+                except Exception as e:
+                    logger.error(f"Profit close error {sym}: {e}")
+                continue
+
+            # ─ Trailing stop: no upward limit ─────────────────────────────
+            if unr_pct >= 5.0:
+                try:
+                    raw5   = await self.client.klines(sym, "5", 20)
+                    k5     = parse_klines(raw5)
+                    atr_v  = atr(k5, 14) if k5 is not None else entry * 0.01
+                    trail  = atr_v * 1.5
+                    prec   = price_precision(cur)
+                    if side == "Buy":
+                        new_sl = round(cur - trail, prec)
+                        old_sl = float(pos.get("sl_price", 0) or 0)
+                        if new_sl > old_sl + (atr_v * 0.2):
+                            await self.client.set_tpsl(sym, sl=str(new_sl))
+                            logger.info(f"TRAIL ↑ | {sym} sl={new_sl:.4f} (+{unr_pct:.1f}%)")
+                    else:
+                        new_sl = round(cur + trail, prec)
+                        old_sl = float(pos.get("sl_price", 0) or 0)
+                        if old_sl == 0 or new_sl < old_sl - (atr_v * 0.2):
+                            await self.client.set_tpsl(sym, sl=str(new_sl))
+                            logger.info(f"TRAIL ↓ | {sym} sl={new_sl:.4f} (+{unr_pct:.1f}%)")
+                except Exception as e:
+                    logger.debug(f"Trail SL {sym}: {e}")
+
+            # ─ Breakeven at 2% ────────────────────────────────────────────
+            elif unr_pct >= 2.0:
+                try:
+                    prec   = price_precision(entry)
+                    buf    = entry * 0.0008
+                    old_sl = float(pos.get("sl_price", 0) or 0)
+                    if side == "Buy":
+                        be = round(entry + buf, prec)
+                        if old_sl < be - buf:
+                            await self.client.set_tpsl(sym, sl=str(be))
+                            logger.info(f"BREAKEVEN | {sym} sl={be:.4f}")
+                    else:
+                        be = round(entry - buf, prec)
+                        if old_sl == 0 or old_sl > be + buf:
+                            await self.client.set_tpsl(sym, sl=str(be))
+                            logger.info(f"BREAKEVEN | {sym} sl={be:.4f}")
+                except Exception as e:
+                    logger.debug(f"Breakeven {sym}: {e}")
+
+    # ── Diversification Gate ──────────────────────────────────────────────────
+
+    def _can_open(self, symbol: str, signal: str) -> Tuple[bool, str]:
+        db_open   = get_open_positions()
+        open_syms = {p["symbol"] for p in db_open}
+
+        if symbol in open_syms:
+            return False, "Already open"
+        if symbol in self.losing_symbols:
+            return False, "Currently losing — cooling off"
+
+        my_class = get_asset_class(symbol)
+        for p in db_open:
+            if get_asset_class(p["symbol"]) == my_class:
+                return False, f"Class {my_class} occupied by {p['symbol']}"
+
+        if len(open_syms) >= self.compound.compute_max_concurrent():
+            return False, "Max concurrent reached"
+
+        return True, "OK"
+
+    # ── Trade Execution ───────────────────────────────────────────────────────
 
     async def execute(self, symbol: str, analysis: Dict, meta: Dict) -> bool:
         ce     = self.compound
@@ -128,393 +332,344 @@ class CompoundTradingEngine:
         conf   = analysis["confidence"]
         comp   = analysis["composite"]
         mode   = ce.state.mode
+        adj    = self.regime.adjustments()
 
-        # Fetch fresh price + ATR
         raw5  = await self.client.klines(symbol, "5", 50)
         k5    = parse_klines(raw5)
         if k5 is None or len(k5) == 0: return False
 
-        price    = float(k5[-1, 4])
-        atr_val  = atr(k5, 14)
+        price   = float(k5[-1, 4])
+        atr_val = atr(k5, 14)
 
-        sym_stats= get_symbol_stats(symbol)
-        sl_mult, tp_mult = ce.compute_sl_tp_mults(
-            sym_stats.get("sl_mult", 1.2),
-            sym_stats.get("tp_mult", 2.4)
-        )
-        leverage = ce.compute_leverage(meta.get("range_pct", 5.0))
+        ss      = get_symbol_stats(symbol)
+        sl_mult = max(0.8, min(ss.get("sl_mult", 1.2) + adj["sl_bonus"], 2.5))
+        tp_mult = max(1.8, min(ss.get("tp_mult", 2.4) + adj["tp_bonus"], 5.0))
+        leverage= max(10, min(ce.compute_leverage(meta.get("range_pct", 5.0)) + adj["lev_bonus"], 25))
 
-        # Position size — micro-account safe sizing
-        risk_pct = ce.compute_risk_pct()
-        risk_usd = self.balance * risk_pct
-        sl_dist  = atr_val * sl_mult if atr_val > 0 else price * 0.009
-        qty      = (risk_usd * leverage) / price
-        qty      = max(qty, 0.001)
+        risk_pct     = ce.compute_risk_pct()
+        risk_usd     = self.balance * risk_pct
+        min_notional = float(gp("min_notional_usdt","5.5"))
+        qty          = (risk_usd * leverage) / price
 
-        # Bybit minimum notional check ($5.5 USDT minimum order value)
-        min_notional = float(gp("min_notional_usdt", "5.5"))
         if qty * price < min_notional:
-            # Bump qty up to meet minimum — use leverage to keep margin small
-            qty = (min_notional * 1.05) / price   # 5% buffer over minimum
+            qty = (min_notional * 1.05) / price
+        max_n = self.balance * 0.40 * leverage
+        if qty * price > max_n:
+            qty = max_n / price
 
-        # Cap single-trade notional at 40% of balance * leverage
-        # For $10: max notional = $10 * 0.40 * 15x = $60 (margin used = $4)
-        max_notional = self.balance * 0.40 * leverage
-        if qty * price > max_notional:
-            qty = max_notional / price
+        if price >= 1000: qty = round(qty, 3)
+        elif price >= 1:  qty = round(qty, 2)
+        else:             qty = max(round(qty, 0), 1)
 
-        # Round to correct precision for the asset price
-        if price >= 1000:
-            qty = round(qty, 3)
-        elif price >= 1:
-            qty = round(qty, 2)
-        else:
-            qty = round(qty, 0)  # e.g. SHIB, very small price = whole units
-            qty = max(qty, 1)
-
-        # Final sanity: if balance too low to meet minimum, skip trade
-        required_margin = (min_notional) / leverage
-        if self.balance < required_margin * 1.5:
-            logger.warning(f"Balance ${self.balance:.2f} too low for {symbol} minimum order. Skipping.")
-            return False
+        if self.balance < (min_notional / leverage) * 1.5:
+            logger.warning(f"Balance too low for {symbol}"); return False
 
         side = "Buy" if signal == "LONG" else "Sell"
         sl, tp = sl_tp(side, price, atr_val, sl_mult, tp_mult)
 
-        try:
-            await self.client.set_leverage(symbol, leverage)
+        try: await self.client.set_leverage(symbol, leverage)
         except Exception: pass
 
         resp = await self.client.place_order(symbol, side, qty, sl=sl, tp=tp)
         if resp.get("retCode", -1) != 0:
-            err = resp.get("retMsg", "?")
+            err = resp.get("retMsg","?")
             logger.error(f"Order fail {symbol}: {err}")
             self.errors.append(f"{datetime.now().isoformat()} | {symbol} | {err}")
             return False
 
-        order_id = resp.get("result", {}).get("orderId", "")
+        order_id = resp.get("result",{}).get("orderId","")
         epoch    = ce.state.epoch_num
-
-        tid = open_trade(
+        open_trade(
             epoch=epoch, symbol=symbol, side=side, signal=signal,
             confidence=conf, composite=comp,
             entry_price=price, qty=qty, leverage=leverage,
             sl=sl, tp=tp, order_id=order_id,
-            tag=f"EP{epoch}_L{leverage}_C{conf}_{mode}",
-            mode=mode, components=analysis.get("components", {}),
-            vol_score=meta.get("vol_score", 0),
-            range_pct=meta.get("range_pct", 0),
+            tag=f"EP{epoch}_L{leverage}_{self.regime.regime[:3]}_{mode[:3]}",
+            mode=mode, components=analysis.get("components",{}),
+            vol_score=meta.get("vol_score",0), range_pct=meta.get("range_pct",0),
         )
         logger.info(
-            f"OPEN [{mode}] {symbol} {signal} | qty={qty} @ ${price:.4f} "
-            f"| SL={sl:.4f} TP={tp:.4f} | L={leverage}x | ep={epoch} | conf={conf}%"
+            f"OPEN [{mode}/{self.regime.regime}] {symbol} {signal} "
+            f"qty={qty}@${price:.4f} SL={sl:.4f} TP={tp:.4f} L={leverage}x"
         )
         return True
 
-    # ── Position Monitor ─────────────────────────────────────────────────────
+    # ── Position Monitor ──────────────────────────────────────────────────────
 
     async def monitor(self):
         await self.refresh_live_positions()
         db_open = get_open_positions()
-        initial = float(gp("initial_capital", "100.0"))
-        epoch   = self.compound.state.epoch_num
+        initial = float(gp("epoch_start_bal","0.0") or "0.0") or self.balance or 10.0
+
+        self.losing_symbols = set()
+        for pos in db_open:
+            if (pos.get("unrealised_pnl") or 0) < -0.05:
+                self.losing_symbols.add(pos["symbol"])
 
         for pos in db_open:
-            sym = pos["symbol"]
-            tid = pos["trade_id"]
-
+            sym = pos["symbol"]; tid = pos["trade_id"]
             if sym in self.live_positions:
                 live = self.live_positions[sym]
                 try:
-                    unr  = float(live.get("unrealisedPnl", "0") or "0")
-                    cprc = float(live.get("markPrice",     "0") or "0")
+                    unr  = float(live.get("unrealisedPnl","0") or "0")
+                    cprc = float(live.get("markPrice",    "0") or "0")
                     update_pos_price(sym, cprc, unr)
                 except Exception: pass
             else:
-                # Closed by SL/TP — fetch result
                 pnl = 0.0; exit_p = 0.0
                 try:
-                    pr   = await self.client.closed_pnl(sym, 10)
-                    pls  = pr.get("result", {}).get("list", [])
+                    pr  = await self.client.closed_pnl(sym, 10)
+                    pls = pr.get("result",{}).get("list",[])
                     if pls:
-                        pnl    = float(pls[0].get("closedPnl",    "0") or "0")
-                        exit_p = float(pls[0].get("avgExitPrice", "0") or "0")
+                        pnl    = float(pls[0].get("closedPnl",   "0") or "0")
+                        exit_p = float(pls[0].get("avgExitPrice","0") or "0")
                 except Exception: pass
-
                 outcome = close_trade(tid, exit_p, pnl, initial)
                 win     = outcome == "WIN"
-
-                # Feed compound engine
                 self.compound.record_outcome(win, pnl, self.balance)
+                self.cooldown_until[sym] = time.time() + (30 if win else 180)
+                if not win: self.losing_symbols.add(sym)
+                logger.info(f"CLOSED | {sym} | {outcome} | ${pnl:.4f}")
 
-                # Cooldown on loss
-                if not win:
-                    cd = 120
-                    self.cooldown_until[sym] = time.time() + cd
-
-                logger.info(f"CLOSED | {sym} | {outcome} | PnL=${pnl:.4f}")
-
-    # ── Scan & Trade ─────────────────────────────────────────────────────────
+    # ── Scan & Trade ──────────────────────────────────────────────────────────
 
     async def scan_and_trade(self):
         ce = self.compound
-
-        # Check circuit breakers
         if ce.check_circuit_breakers(
             self.balance,
-            epoch_max_dd = float(gp("epoch_max_dd_pct", "30")) / 100,
-            daily_max_dd = float(gp("daily_max_dd_pct", "20")) / 100,
+            epoch_max_dd=float(gp("epoch_max_dd_pct","35"))/100,
+            daily_max_dd=float(gp("daily_max_dd_pct","25"))/100,
         ):
-            logger.warning(f"Circuit breaker active | mode={ce.state.mode}")
             return
 
         await self.refresh_balance()
-        top_syms   = await self.scanner.scan(n=int(gp("vol_scan_n","14")))
-        db_open    = {p["symbol"] for p in get_open_positions()}
-        conf_floor = ce.compute_confidence_floor()
-        max_conc   = ce.compute_max_concurrent()
+        top_syms   = await self.scanner.scan(n=int(gp("vol_scan_n","10")))
+        adj        = self.regime.adjustments()
+        conf_floor = max(35, ce.compute_confidence_floor() + adj["conf_bonus"])
         mode       = ce.state.mode
 
         results = []
         for meta in top_syms:
             sym = meta["symbol"]
-
-            # Cooldown check
             if self.cooldown_until.get(sym, 0) > time.time(): continue
 
             data = await self.fetch_data(sym)
             if not data: continue
 
-            sym_stats    = get_symbol_stats(sym)
-            learned_bias = sym_stats.get("learned_bias", 0.0)
-
-            analysis = self.signals.analyze(
-                sym      = sym,
-                k3m      = data["k3m"],
-                k5m      = data["k5m"],
-                k15m     = data["k15m"],
-                k1h      = data["k1h"],
-                funding  = data["funding"],
-                ls       = data["ls"],
-                oi_pct   = data["oi_pct"],
-                ob_imb   = data["ob_imb"],
-                liqs     = data["liqs"],
-                learned_bias = learned_bias,
-                mode     = mode,
+            ss   = get_symbol_stats(sym)
+            bias = ss.get("learned_bias", 0.0)
+            an   = self.signals.analyze(
+                sym=sym, k3m=data["k3m"], k5m=data["k5m"],
+                k15m=data["k15m"], k1h=data["k1h"],
+                funding=data["funding"], ls=data["ls"],
+                oi_pct=data["oi_pct"], ob_imb=data["ob_imb"],
+                liqs=data["liqs"], learned_bias=bias, mode=mode,
             )
 
-            signal = analysis["signal"]; conf = analysis["confidence"]
             result = {
-                "symbol": sym, "signal": signal, "confidence": conf,
-                "composite": analysis["composite"],
-                "leverage": ce.compute_leverage(meta.get("range_pct", 5)),
-                "vol_score": meta.get("vol_score", 0),
-                "range_pct": meta.get("range_pct", 0),
-                "chg_24h":   meta.get("chg_24h", 0),
-                "mode": mode, "ts": int(time.time()), "action": "HOLD"
+                "symbol":sym, "signal":an["signal"], "confidence":an["confidence"],
+                "composite":an["composite"], "leverage":ce.compute_leverage(meta.get("range_pct",5)),
+                "vol_score":meta.get("vol_score",0), "range_pct":meta.get("range_pct",0),
+                "chg_24h":meta.get("chg_24h",0),
+                "regime":self.regime.regime, "mode":mode,
+                "ts":int(time.time()), "action":"HOLD"
             }
 
-            already_open = sym in db_open
-            can_open     = len(db_open) < max_conc and not already_open
-
-            if signal != "HOLD" and conf >= conf_floor:
-                if can_open:
-                    ok = await self.execute(sym, analysis, meta)
-                    if ok:
-                        db_open.add(sym)
-                        result["action"] = "OPENED"
-                elif already_open:
-                    result["action"] = "MONITORING"
+            if an["signal"] != "HOLD" and an["confidence"] >= conf_floor:
+                can, reason = self._can_open(sym, an["signal"])
+                if can:
+                    ok = await self.execute(sym, an, meta)
+                    result["action"] = "OPENED" if ok else "EXEC_FAIL"
                 else:
-                    result["action"] = "MAX_POSITIONS"
+                    result["action"] = f"BLOCKED:{reason}"
+
             results.append(result)
             await asyncio.sleep(0.25)
 
         self.scan_results = results
         self.last_scan_ts = int(time.time())
 
-    # ── Epoch Boundary ───────────────────────────────────────────────────────
+    # ── Hourly Strategy Adjustment ────────────────────────────────────────────
+
+    async def hourly_strategy_update(self):
+        await self.refresh_balance()
+        ce = self.compound; s = ce.state
+
+        if self._klines_cache:
+            self.regime.update(self._klines_cache)
+
+        h_trades = get_trades(hours=1)
+        h_closed = [t for t in h_trades if t["outcome"] not in ("OPEN",None)]
+        h_wins   = sum(1 for t in h_closed if t["outcome"]=="WIN")
+        h_pnl    = sum(t["pnl_usdt"] or 0 for t in h_closed)
+        h_wr     = h_wins/len(h_closed)*100 if h_closed else 0
+        stats    = all_time_stats()
+
+        snap_hour(s.epoch_num, self.balance, h_pnl, len(h_closed), h_wins,
+                  stats["open_positions"], s.mode)
+        log_capital(epoch=s.epoch_num, day_in_epoch=s.day_in_epoch,
+                    balance=self.balance, target_now=ce.target_at_now(),
+                    target_eod=ce.target_at_day_end(),
+                    ahead_pct=ce.ahead_pct(self.balance),
+                    mode=s.mode, open_pos=stats["open_positions"])
+
+        sp("market_regime",    self.regime.regime)
+        sp("regime_label",     self.regime.adjustments()["label"])
+        sp("hourly_win_rate",  str(round(h_wr,1)))
+        sp("hourly_pnl",       str(round(h_pnl,4)))
+        sp("last_strategy_ts", str(int(time.time())))
+
+        await self.scanner.scan(force=True)
+        logger.info(f"Hourly | regime={self.regime.regime} | pnl=${h_pnl:.4f} | wr={h_wr:.1f}%")
+
+    # ── Epoch Boundary ────────────────────────────────────────────────────────
 
     async def check_epoch_boundary(self):
-        """Check if epoch has elapsed and advance if so."""
         await self.refresh_balance()
-        ce  = self.compound
-        old = ce.state.epoch_num
-
-        advanced = ce.advance_epoch(self.balance)
-        if advanced:
-            # Record completed epoch
+        ce = self.compound; old = ce.state.epoch_num
+        if ce.advance_epoch(self.balance):
             close_epoch_record(old, self.balance)
-            new_epoch = ce.state.epoch_num
-
-            # Persist new epoch state
-            sp("current_epoch",   str(new_epoch))
+            sp("current_epoch",   str(ce.state.epoch_num))
             sp("epoch_start_ts",  str(ce.state.epoch_start_ts))
-            sp("epoch_start_bal", str(round(ce.state.epoch_start_bal, 4)))
-
-            # Create new epoch record
-            open_epoch_record(new_epoch, ce.state.epoch_start_bal)
-
+            sp("epoch_start_bal", str(round(ce.state.epoch_start_bal,4)))
+            open_epoch_record(ce.state.epoch_num, ce.state.epoch_start_bal)
+            self.losing_symbols.clear()
             await self.send_epoch_report(old, self.balance, ce.state.epoch_target)
-            logger.info(f"New epoch {new_epoch} | stake=${ce.state.epoch_start_bal:.2f} | target=${ce.state.epoch_target:.2f}")
-
-    # ── Hourly + Daily Tasks ─────────────────────────────────────────────────
-
-    async def hourly_tasks(self):
-        await self.refresh_balance()
-        ce = self.compound
-        s  = ce.state
-
-        stats   = all_time_stats()
-        h_trades= get_trades(hours=1)
-        h_wins  = sum(1 for t in h_trades if t["outcome"] == "WIN")
-        h_pnl   = sum(t["pnl_usdt"] or 0 for t in h_trades if t["outcome"] != "OPEN")
-
-        snap_hour(s.epoch_num, self.balance, h_pnl,
-                  len(h_trades), h_wins, stats["open_positions"], s.mode)
-        log_capital(
-            epoch        = s.epoch_num,
-            day_in_epoch = s.day_in_epoch,
-            balance      = self.balance,
-            target_now   = ce.target_at_now(),
-            target_eod   = ce.target_at_day_end(),
-            ahead_pct    = ce.ahead_pct(self.balance),
-            mode         = s.mode,
-            open_pos     = stats["open_positions"],
-        )
-        await self.scanner.scan(force=True)
-        logger.info(f"Hourly | ep={s.epoch_num} | bal=${self.balance:.2f} | mode={s.mode}")
 
     async def daily_tasks(self):
         await self.refresh_balance()
         self.compound.advance_day(self.balance)
         self.compound.reset_daily_cb()
+        self.losing_symbols.clear()
         await self.send_daily_report()
 
     # ── Main Loop ─────────────────────────────────────────────────────────────
 
     async def main_loop(self):
-        self.running = True
-        self.status  = "RUNNING"
-        await self.refresh_balance()
-        logger.info(f"CompoundEngine START | balance=${self.balance:.2f} | mode={self.compound.state.mode}")
+        self.running = True; self.status = "RUNNING"
 
-        scan_secs      = int(gp("scan_interval_s", "40"))
-        last_daily_hour= -1
+        # ── Auto-detect balance from Bybit on startup ─────────────────────────
+        live_bal = await self.refresh_balance()
+        logger.info(f"Live Bybit balance on startup: ${live_bal:.4f} USDT")
+
+        if live_bal > 0 and self.capital_auto_detected:
+            # First ever run — seed all capital params from real balance
+            logger.info(f"Auto-seeding capital from Bybit balance: ${live_bal:.4f}")
+            sp("initial_capital", str(round(live_bal, 4)))
+            sp("epoch_start_bal", str(round(live_bal, 4)))
+            sp("epoch_start_ts",  str(int(time.time())))
+            sp("current_epoch",   "1")
+
+            # Update compound engine with real balance
+            self.compound.initialise(
+                start_balance   = live_bal,
+                epoch_num       = 1,
+                epoch_start_ts  = int(time.time()),
+                epoch_start_bal = live_bal,
+            )
+
+            # Update epoch 1 DB record with real start balance
+            open_epoch_record(1, live_bal)
+
+            # Adjust min notional and concurrent based on balance size
+            if live_bal < 20:
+                sp("min_notional_usdt", "5.5")
+                sp("max_concurrent",    "3")
+                sp("vol_scan_n",        "8")
+            elif live_bal < 100:
+                sp("min_notional_usdt", "5.5")
+                sp("max_concurrent",    "5")
+                sp("vol_scan_n",        "10")
+            elif live_bal < 500:
+                sp("min_notional_usdt", "10.0")
+                sp("max_concurrent",    "8")
+                sp("vol_scan_n",        "12")
+            else:
+                sp("min_notional_usdt", "20.0")
+                sp("max_concurrent",    "12")
+                sp("vol_scan_n",        "14")
+
+            self.capital_auto_detected = False
+            logger.info(
+                f"Capital auto-configured | initial=${live_bal:.4f} "
+                f"| target=${self.compound.state.epoch_target:.4f} "
+                f"| epoch_1"
+            )
+
+        elif live_bal > 0:
+            # Subsequent run — update current balance but keep epoch intact
+            self.balance = live_bal
+            logger.info(f"Engine resumed | Epoch {self.compound.state.epoch_num} | ${live_bal:.4f}")
+
+        else:
+            logger.warning(
+                "Could not read Bybit balance (0.0). "
+                "Check API keys and that funds are in Unified Trading Account. "
+                "Engine will retry on each scan cycle."
+            )
+
+        logger.info(f"Engine START | ${self.balance:.4f} | mode={self.compound.state.mode} | target=${self.compound.state.epoch_target:.4f}")
+        scan_secs = int(gp("scan_interval_s","45"))
+        last_daily_hour = -1
 
         while self.running:
             t0 = time.time()
             try:
                 await self.monitor()
+                await self.check_profit_targets()
                 await self.check_epoch_boundary()
                 await self.scan_and_trade()
-
                 now = time.time()
                 if now - self.last_hour_ts >= 3600:
-                    await self.hourly_tasks()
+                    await self.hourly_strategy_update()
                     self.last_hour_ts = now
-
                 cur_hour = datetime.now(timezone.utc).hour
                 if cur_hour == 0 and last_daily_hour != 0:
                     await self.daily_tasks()
                 last_daily_hour = cur_hour
-
             except asyncio.CancelledError: break
             except Exception as e:
-                logger.error(f"Loop error: {e}", exc_info=True)
+                logger.error(f"Loop: {e}", exc_info=True)
                 self.errors.append(f"{datetime.now().isoformat()} | {e}")
                 await asyncio.sleep(5)
-
             await asyncio.sleep(max(0, scan_secs - (time.time() - t0)))
 
-        self.status  = "STOPPED"; self.running = False
+        self.status = "STOPPED"; self.running = False
         if self.client: await self.client.close()
 
-    async def stop(self):
-        self.running = False
+    async def stop(self): self.running = False
 
-    # ── Reports ──────────────────────────────────────────────────────────────
+    # ── Reports ───────────────────────────────────────────────────────────────
 
-    async def send_epoch_report(self, epoch_num: int, achieved: float, next_target: float):
+    async def send_epoch_report(self, epoch_num, achieved, next_target):
         try:
-            target = self.compound.state.epoch_start_bal  # before advance = old start
-            pct    = (achieved - target) / target * 100 if target > 0 else 0
-            body   = f"""
-EPOCH {epoch_num} COMPLETE — BYBIT COMPOUND MCP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Epoch Start:   ${target:.2f} USDT
-Achieved:      ${achieved:.2f} USDT
-Target was:    ${target * 2:.2f} USDT
-Gain:          {pct:+.1f}%
-Status:        {'✓ DOUBLED' if achieved >= target * 2 else '✗ MISSED TARGET'}
-
-Next Epoch {epoch_num + 1}:
-  New Stake:   ${achieved:.2f} USDT
-  New Target:  ${next_target:.2f} USDT
-  Required:    {DAILY_REQUIRED_PCT:.2f}%/day for {EPOCH_DAYS} days
-
-Projected Milestones (if targets met):
-"""
-            proj = self.compound.project_compounding(achieved, 8)
-            for p in proj[:8]:
-                body += f"  Epoch {p['epoch']}: ${p['target']:.2f}  (Day {p['days_elapsed']})\n"
-            self._send_email(f"[Bybit Compound] Epoch {epoch_num} Done | ${achieved:.2f}", body)
-        except Exception as e:
-            logger.error(f"epoch report: {e}")
+            stake = self.compound.state.epoch_start_bal
+            pct   = (achieved - stake) / stake * 100 if stake else 0
+            body  = (f"EPOCH {epoch_num} | ${stake:.2f}→${achieved:.2f} "
+                     f"({pct:+.1f}%) | {'✓ DOUBLED' if achieved>=stake*2 else '✗ MISSED'}\n"
+                     f"Next epoch: ${achieved:.2f}→${next_target:.2f}\n")
+            self._send_email(f"[Bybit] Ep{epoch_num} ${achieved:.2f}", body)
+        except Exception as e: logger.error(f"epoch report: {e}")
 
     async def send_daily_report(self):
         try:
-            ce    = self.compound
-            stats = all_time_stats()
-            est   = self.compound.state.epoch_start_bal + stats["total_pnl"]
-            ahead = ce.ahead_pct(est)
-            body  = f"""
-BYBIT COMPOUND MCP — DAILY REPORT
-Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-EPOCH {ce.state.epoch_num} — Day {ce.state.day_in_epoch}/{EPOCH_DAYS}
-  Mode:          {ce.state.mode}
-  Epoch Stake:   ${ce.state.epoch_start_bal:.2f}
-  Epoch Target:  ${ce.state.epoch_target:.2f}
-  Est. Balance:  ${est:.4f}
-  Target Now:    ${ce.target_at_now():.4f}
-  Status:        {'✓ ON TRACK' if ahead >= -0.08 else '✗ BEHIND — ' + f'{ahead*100:.1f}%'}
-  Days Left:     {ce.days_remaining():.1f}
-
-PERFORMANCE
-  Total Trades:  {stats['total_trades']}
-  Win Rate:      {stats['win_rate']}%
-  Total PnL:     ${stats['total_pnl']:.4f}
-  Today PnL:     ${stats['today_pnl']:.4f}
-  Open Pos:      {stats['open_positions']}
-  Streak:        {ce.state.streak:+d}
-
-SIZING
-  Risk/Trade:    {ce.compute_risk_pct()*100:.2f}%
-  Conf Floor:    {ce.compute_confidence_floor()}
-  Max Positions: {ce.compute_max_concurrent()}
-"""
+            ce = self.compound; stats = all_time_stats()
+            body = (f"Day {ce.state.day_in_epoch}/5 Ep{ce.state.epoch_num} | "
+                    f"${self.balance:.4f} | Mode:{ce.state.mode} | "
+                    f"Regime:{self.regime.regime}\n"
+                    f"WR:{stats['win_rate']}% PnL:${stats['total_pnl']:.4f}\n")
             self._send_email(
-                f"[Bybit Compound] Day {ce.state.day_in_epoch} Ep{ce.state.epoch_num} | ${est:.2f} | {ce.state.mode}",
-                body
-            )
-        except Exception as e:
-            logger.error(f"daily report: {e}")
+                f"[Bybit] Day{ce.state.day_in_epoch} ${self.balance:.2f}", body)
+        except Exception as e: logger.error(f"daily report: {e}")
 
-    def _send_email(self, subject: str, body: str):
-        if not SMTP_USER or not SMTP_PASS:
-            logger.info(f"[EMAIL] {subject}\n{body[:200]}..."); return
+    def _send_email(self, subject, body):
+        if not SMTP_USER or not SMTP_PASS: return
         try:
-            msg = MIMEText(body)
-            msg["Subject"] = subject
-            msg["From"]    = SMTP_USER
-            msg["To"]      = REPORT_EMAIL
+            msg = MIMEText(body); msg["Subject"]=subject
+            msg["From"]=SMTP_USER; msg["To"]=REPORT_EMAIL
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as sv:
                 sv.starttls(); sv.login(SMTP_USER, SMTP_PASS); sv.send_message(msg)
-            logger.info(f"Email sent: {subject}")
-        except Exception as e:
-            logger.error(f"email error: {e}")
+        except Exception as e: logger.error(f"email: {e}")
 
 
 engine = CompoundTradingEngine()

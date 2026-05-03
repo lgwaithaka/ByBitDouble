@@ -164,7 +164,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
     <div class="hstat"><div class="hstat-l">Win Rate</div><div class="hstat-v" id="h-wr">—</div></div>
     <div class="hstat"><div class="hstat-l">Open Pos</div><div class="hstat-v neu" id="h-open">—</div></div>
   </div>
-  <div style="display:flex;gap:8px;align-items:center">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span style="font-size:10px;color:var(--muted)" id="last-ts">—</span>
+    <span class="badge" id="regime-badge">—</span>
     <span class="badge" id="mode-badge">—</span>
     <span class="sp" id="loading" style="display:none"></span>
   </div>
@@ -498,11 +500,21 @@ async function loadOverview(){
     // Epoch mini chart
     buildEpochMini(or.epoch_history||[],est,c.epoch_start_bal,c.epoch_target);
 
-    // Pills
+    // Pills (hot assets)
     loadPills();
 
-    document.getElementById('loading').style.display='none';
-  }catch(e){console.error(e);document.getElementById('loading').style.display='none';}
+    // Regime badge
+    const regimeEl = document.getElementById('regime-badge');
+    if(regimeEl){
+      const rm = or.regime||gp('market_regime')||'RANGING';
+      const rmap = {'TRENDING':'bg','RANGING':'bb','VOLATILE':'br'};
+      regimeEl.className='badge '+(rmap[rm]||'bb');
+      regimeEl.textContent = rm;
+    }
+
+  }catch(e){
+    console.error('loadOverview error:', e);
+  }
 }
 
 async function buildBalance(or){
