@@ -1,3 +1,5 @@
+import time
+import json
 """
 dashboard_api.py — Dashboard backend (port 8080)
 """
@@ -154,6 +156,26 @@ async def set_params(body: dict):
         if k in valid:
             sp(k, str(v)); upd[k] = v
     return JSONResponse({"updated": upd})
+
+
+
+@app.get("/api/whale")
+async def whale_data():
+    """Whale intelligence data for dashboard."""
+    summary_str = gp("whale_summary", "{}")
+    opps_str    = gp("whale_opportunities", "[]")
+    last_upd    = int(gp("whale_last_update", "0") or "0")
+    try:
+        summary = json.loads(summary_str or "{}")
+        opps    = json.loads(opps_str or "[]")
+    except Exception:
+        summary = {}; opps = []
+    return JSONResponse({
+        "summary":      summary,
+        "opportunities":opps,
+        "last_update":  last_upd,
+        "age_minutes":  round((time.time()-last_upd)/60,1) if last_upd else None,
+    })
 
 
 @app.get("/api/health")

@@ -271,17 +271,19 @@ class CompoundEngine:
         notional meets Bybit $5 minimum while keeping margin small.
         """
         s = self.state
-        # Base leverage from volatility — higher floor for micro-account
-        if   range_pct > 20: base_lev = 15   # extreme volatile: 15x
-        elif range_pct > 12: base_lev = 18   # high volatile: 18x
-        elif range_pct > 7:  base_lev = 20   # moderate: 20x
-        elif range_pct > 3:  base_lev = 22   # lower volatile: 22x
-        else:                base_lev = 25   # BTC/ETH quiet: 25x max
+        # Leverage calibrated for 2.0x ATR stops (new signal engine).
+        # Lower leverage = stops don't get hit by normal noise.
+        # Research: "Start with low leverage 5x-10x to avoid liquidation"
+        if   range_pct > 20: base_lev = 5    # extreme volatile: 5x only
+        elif range_pct > 12: base_lev = 7    # high volatile
+        elif range_pct > 7:  base_lev = 10   # moderate volatile
+        elif range_pct > 3:  base_lev = 12   # BTC/ETH normal
+        else:                base_lev = 15   # quiet markets
 
-        # Mode boost
-        boosts = {"CONSERVATIVE": -3, "NORMAL": 0, "AGGRESSIVE": 2, "TURBO": 3}
+        # Mode adjustment (conservative = less leverage)
+        boosts = {"CONSERVATIVE": -2, "NORMAL": 0, "AGGRESSIVE": 2, "TURBO": 3}
         lev = base_lev + boosts.get(s.mode, 0)
-        return max(10, min(lev, 25))   # floor 10x, cap 25x
+        return max(3, min(lev, 15))   # floor 3x, cap 15x (was 25x)
 
     def compute_sl_tp_mults(self, symbol_sl: float = 1.2, symbol_tp: float = 2.4) -> Tuple[float, float]:
         """

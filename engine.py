@@ -15,7 +15,8 @@ import numpy as np
 
 from bybit_client    import BybitClient
 from scanner         import VScanner, parse_klines, atr, p_funding, p_ls, p_oi, p_ob, p_liq, price_precision
-from signals         import SignalEngine, sl_tp
+from signals         import QuantSignalEngine, sl_tp
+from whale_intelligence import WhaleEngine
 from compound_engine import CompoundEngine, DAILY_REQUIRED_PCT, EPOCH_DAYS
 from db import (
     init_db, gp, sp, open_trade, close_trade, update_pos_price,
@@ -110,9 +111,10 @@ class CompoundTradingEngine:
     def __init__(self):
         self.client:   Optional[BybitClient]    = None
         self.scanner:  Optional[VScanner]       = None
-        self.signals   = SignalEngine()
+        self.signals   = QuantSignalEngine()
         self.compound  = CompoundEngine()
         self.regime    = MarketRegime()
+        self.whales    = WhaleEngine()        # Smart money / whale tracker
 
         self.running        = False
         self.status         = "IDLE"
@@ -156,6 +158,7 @@ class CompoundTradingEngine:
         self.compound.initialise(initial or epoch_bal or 10.0,
                                  epoch_num, epoch_ts,
                                  epoch_bal or 10.0)
+        self.whales.set_client(self.client)
         logger.info(f"Engine init | Epoch {epoch_num} | saved_bal=${epoch_bal:.4f} | auto_detect={self.capital_auto_detected}")
 
     # ── Balance ──────────────────────────────────────────────────────────────
@@ -191,13 +194,15 @@ class CompoundTradingEngine:
 
     # ── Fetch Market Data ─────────────────────────────────────────────────────
 
+
     async def fetch_data(self, symbol: str) -> Optional[Dict]:
         try:
             results = await asyncio.gather(
-                self.client.klines(symbol, "3",  80),
-                self.client.klines(symbol, "5",  130),
-                self.client.klines(symbol, "15", 60),
-                self.client.klines(symbol, "60", 40),
+                self.client.klines(symbol, "3",   80),   # 3m  — timing
+                self.client.klines(symbol, "5",  130),   # 5m  — entry
+                self.client.klines(symbol, "15",  80),   # 15m — setup
+                self.client.klines(symbol, "60",  60),   # 1h  — structure
+                self.client.klines(symbol, "240", 60),   # 4H  — MACRO GATE
                 self.client.funding(symbol),
                 self.client.ls_ratio(symbol),
                 self.client.open_interest(symbol, "1h"),
@@ -205,20 +210,21 @@ class CompoundTradingEngine:
                 self.client.liquidations(symbol),
                 return_exceptions=True
             )
-            k3,k5,k15,k1h,fr,lsr,oi,ob,liq = results
+            k3,k5,k15,k1h,k4h,fr,lsr,oi,ob,liq = results
             k5p = parse_klines(k5) if not isinstance(k5, Exception) else None
             if k5p is not None:
                 self._klines_cache[symbol] = k5p
             return {
-                "k3m":  parse_klines(k3)  if not isinstance(k3,  Exception) else None,
+                "k3m":  parse_klines(k3)   if not isinstance(k3,  Exception) else None,
                 "k5m":  k5p,
-                "k15m": parse_klines(k15) if not isinstance(k15, Exception) else None,
-                "k1h":  parse_klines(k1h) if not isinstance(k1h, Exception) else None,
-                "funding": p_funding(fr)  if not isinstance(fr,  Exception) else 0.0,
-                "ls":      p_ls(lsr)      if not isinstance(lsr, Exception) else 1.0,
-                "oi_pct":  p_oi(oi)       if not isinstance(oi,  Exception) else 0.0,
-                "ob_imb":  p_ob(ob)       if not isinstance(ob,  Exception) else 1.0,
-                "liqs":    p_liq(liq)     if not isinstance(liq, Exception) else {},
+                "k15m": parse_klines(k15)  if not isinstance(k15, Exception) else None,
+                "k1h":  parse_klines(k1h)  if not isinstance(k1h, Exception) else None,
+                "k4h":  parse_klines(k4h)  if not isinstance(k4h, Exception) else None,
+                "funding": p_funding(fr)   if not isinstance(fr,  Exception) else 0.0,
+                "ls":      p_ls(lsr)       if not isinstance(lsr, Exception) else 1.0,
+                "oi_pct":  p_oi(oi)        if not isinstance(oi,  Exception) else 0.0,
+                "ob_imb":  p_ob(ob)        if not isinstance(ob,  Exception) else 1.0,
+                "liqs":    p_liq(liq)      if not isinstance(liq, Exception) else {},
             }
         except Exception as e:
             logger.error(f"fetch_data {symbol}: {e}"); return None
@@ -365,7 +371,16 @@ class CompoundTradingEngine:
             logger.warning(f"Balance too low for {symbol}"); return False
 
         side = "Buy" if signal == "LONG" else "Sell"
-        sl, tp = sl_tp(side, price, atr_val, sl_mult, tp_mult)
+        # Pass kline data for structural SL placement
+        k5_cached  = self._klines_cache.get(symbol)
+        # Fetch fresh k15m for structure (from last fetch_data result)
+        sl, tp = sl_tp(
+        side, price, atr_val,
+        k5m=k5_cached,
+        k15m=None,      # structural from 15m handled inside sl_tp
+        sl_mult=sl_mult,
+        tp_mult=tp_mult,
+        )
 
         try: await self.client.set_leverage(symbol, leverage)
         except Exception: pass
@@ -458,13 +473,24 @@ class CompoundTradingEngine:
 
             ss   = get_symbol_stats(sym)
             bias = ss.get("learned_bias", 0.0)
+
+            # Incorporate whale intelligence score
+            # Cached from last hourly update — decays with age
+            whale_score = self.whales.get_signal_for(sym)
+
             an   = self.signals.analyze(
                 sym=sym, k3m=data["k3m"], k5m=data["k5m"],
                 k15m=data["k15m"], k1h=data["k1h"],
+                k4h=data.get("k4h"),              # 4H macro gate
                 funding=data["funding"], ls=data["ls"],
                 oi_pct=data["oi_pct"], ob_imb=data["ob_imb"],
-                liqs=data["liqs"], learned_bias=bias, mode=mode,
+                liqs=data["liqs"],
+                learned_bias=bias + (whale_score * 0.3),  # Blend whale signal into bias
+                mode=mode,
             )
+            # Attach whale metadata to result
+            an["whale_score"]  = round(whale_score, 3)
+            an["whale_intel"]  = self.whales._cache.get(sym)
 
             result = {
                 "symbol":sym, "signal":an["signal"], "confidence":an["confidence"],
@@ -520,6 +546,22 @@ class CompoundTradingEngine:
         sp("last_strategy_ts", str(int(time.time())))
 
         await self.scanner.scan(force=True)
+
+        # Hourly whale intelligence update
+        try:
+            top_syms = [x["symbol"] for x in self.scanner.top]
+            if top_syms and self.client:
+                whale_data = await self.whales.update_all(top_syms, self.client)
+                top_ops    = self.whales.get_top_opportunities(5)
+                sp("whale_summary",        json.dumps(self.whales.last_summary))
+                sp("whale_opportunities",  json.dumps(top_ops))
+                sp("whale_last_update",    str(int(time.time())))
+                logger.info(f"Whale update | market_bias={self.whales.last_summary.get('market_bias','?')} | "
+                            f"squeezes={self.whales.last_summary.get('short_squeezes',[])} | "
+                            f"top={self.whales.get_top_opportunities(3)}")
+        except Exception as e:
+            logger.error(f"Hourly whale update error: {e}")
+
         logger.info(f"Hourly | regime={self.regime.regime} | pnl=${h_pnl:.4f} | wr={h_wr:.1f}%")
 
     # ── Epoch Boundary ────────────────────────────────────────────────────────

@@ -90,6 +90,158 @@ def _call(coro, t=15):
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
+
+@mcp.tool()
+def get_whale_intelligence() -> str:
+    """
+    Get current smart money / whale tracking data for all scanned symbols.
+    Shows OI trends, funding extremes, liquidation cascades, large trade flows.
+    Updates every hour automatically.
+    """
+    cache    = engine.whales.get_all_cache()
+    summary  = engine.whales.last_summary
+    opps     = engine.whales.get_top_opportunities(8)
+    last_upd = int(gp("whale_last_update", "0") or "0")
+    age_min  = round((time.time() - last_upd) / 60, 1) if last_upd else None
+
+    return json.dumps({
+        "last_update_ago_minutes": age_min,
+        "market_summary":          summary,
+        "top_opportunities":       opps,
+        "symbol_detail":           cache,
+    }, indent=2, default=str)
+
+
+@mcp.tool()
+def get_whale_opportunities() -> str:
+    """
+    Get top whale-backed trading opportunities right now.
+    These are symbols where smart money signals are strongest.
+    """
+    opps = engine.whales.get_top_opportunities(10)
+    return json.dumps({
+        "opportunities": opps,
+        "market_bias":   engine.whales.last_summary.get("market_bias", "UNKNOWN"),
+        "short_squeezes":engine.whales.last_summary.get("short_squeezes", []),
+        "funding_extremes": engine.whales.last_summary.get("funding_extremes", []),
+    }, indent=2)
+
+
+@mcp.tool()
+def force_whale_update() -> str:
+    """Force an immediate whale intelligence refresh for all scanned symbols."""
+    if not engine.client or not engine.scanner:
+        return "Engine not initialised."
+    async def _update():
+        syms = [x["symbol"] for x in engine.scanner.top] if engine.scanner.top else []
+        if not syms:
+            return {"error": "No symbols scanned yet. Call start_trading first."}
+        result = await engine.whales.update_all(syms, engine.client)
+        return {
+            "symbols_updated": len(result),
+            "summary":         engine.whales.last_summary,
+            "top_opportunities": engine.whales.get_top_opportunities(5),
+        }
+    if _loop:
+        r = asyncio.run_coroutine_threadsafe(_update(), _loop).result(60)
+        return json.dumps(r, indent=2, default=str)
+    return "Engine loop not running."
+
+
+@mcp.tool()
+def analyze_trade_performance() -> str:
+    """
+    Analyze your recent trade outcomes and identify patterns.
+    Shows win rate by symbol, time of day, signal type, and market regime.
+    """
+    trades = get_trades(hours=168)  # Last 7 days
+    closed = [t for t in trades if t["outcome"] not in ("OPEN", None)]
+
+    if len(closed) < 4:
+        return json.dumps({
+            "message": f"Only {len(closed)} closed trades. Need more data for pattern analysis.",
+            "suggestion": "The system needs at least 10+ trades to identify meaningful patterns.",
+        }, indent=2)
+
+    # By symbol
+    sym_perf = {}
+    for t in closed:
+        s = t["symbol"]
+        if s not in sym_perf:
+            sym_perf[s] = {"wins":0,"losses":0,"pnl":0.0}
+        if t["outcome"]=="WIN":   sym_perf[s]["wins"]+=1
+        elif t["outcome"]=="LOSS":sym_perf[s]["losses"]+=1
+        sym_perf[s]["pnl"] += t["pnl_usdt"] or 0
+
+    for s in sym_perf:
+        n = sym_perf[s]["wins"] + sym_perf[s]["losses"]
+        sym_perf[s]["win_rate"] = round(sym_perf[s]["wins"]/n*100,1) if n>0 else 0
+        sym_perf[s]["total_trades"] = n
+
+    # By hour of day
+    from datetime import datetime, timezone as tz
+    hour_perf = {}
+    for t in closed:
+        h = datetime.fromtimestamp(t["ts_open"], tz=tz.utc).hour
+        if h not in hour_perf:
+            hour_perf[h] = {"wins":0,"losses":0,"pnl":0.0}
+        if t["outcome"]=="WIN":    hour_perf[h]["wins"]+=1
+        elif t["outcome"]=="LOSS": hour_perf[h]["losses"]+=1
+        hour_perf[h]["pnl"] += t["pnl_usdt"] or 0
+
+    # By mode
+    mode_perf = {}
+    for t in closed:
+        m = t.get("mode","NORMAL") or "NORMAL"
+        if m not in mode_perf:
+            mode_perf[m] = {"wins":0,"losses":0,"pnl":0.0}
+        if t["outcome"]=="WIN":    mode_perf[m]["wins"]+=1
+        elif t["outcome"]=="LOSS": mode_perf[m]["losses"]+=1
+        mode_perf[m]["pnl"] += t["pnl_usdt"] or 0
+
+    wins   = sum(1 for t in closed if t["outcome"]=="WIN")
+    losses = sum(1 for t in closed if t["outcome"]=="LOSS")
+    total_pnl = sum(t["pnl_usdt"] or 0 for t in closed)
+    avg_win   = sum(t["pnl_usdt"] or 0 for t in closed if t["outcome"]=="WIN") / max(wins,1)
+    avg_loss  = sum(t["pnl_usdt"] or 0 for t in closed if t["outcome"]=="LOSS") / max(losses,1)
+
+    return json.dumps({
+        "summary": {
+            "total_trades": len(closed),
+            "wins": wins, "losses": losses,
+            "win_rate": round(wins/len(closed)*100,1) if closed else 0,
+            "total_pnl": round(total_pnl,4),
+            "avg_win": round(avg_win,4),
+            "avg_loss": round(avg_loss,4),
+            "profit_factor": round(abs(avg_win/avg_loss),2) if avg_loss!=0 else 0,
+        },
+        "by_symbol": {k: v for k,v in sorted(sym_perf.items(), key=lambda x: x[1]["pnl"], reverse=True)},
+        "by_hour_utc": {str(k): v for k,v in sorted(hour_perf.items())},
+        "by_mode": mode_perf,
+        "problems_identified": _identify_problems(closed, wins, losses, sym_perf),
+    }, indent=2, default=str)
+
+
+def _identify_problems(closed, wins, losses, sym_perf):
+    problems = []
+    n = len(closed)
+    wr = wins/n*100 if n>0 else 0
+
+    if wr < 40:
+        problems.append(f"WIN RATE CRITICAL: {wr:.1f}% — signals firing on too-low confidence. Increase confidence_floor.")
+    if wr < 50 and n>=5:
+        problems.append("Consider: stop_trading and run check_bybit_connection to verify feed quality.")
+
+    bad_syms = [s for s,v in sym_perf.items() if v["losses"]>2 and (v["wins"]/(v["wins"]+v["losses"]))<0.35]
+    if bad_syms:
+        problems.append(f"Poor symbols: {bad_syms} — these are consistently losing. Consider blacklisting.")
+
+    if not problems:
+        problems.append("No major problems detected. Keep running!")
+
+    return problems
+
+
 @mcp.tool()
 def start_trading() -> str:
     """Start the perpetual compound trading engine. Doubles every 5 days forever."""
