@@ -86,7 +86,7 @@ def calc_volume_confirm(k, n=8):
     except: return 0.5
 
 
-class QuantSignalEngine:
+class SignalEngine:
     """
     Hard multi-timeframe gate system.
     Gate 1: 4H macro trend (veto if ranging or disagrees)
