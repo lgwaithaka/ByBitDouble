@@ -275,7 +275,7 @@ class SignalEngine:
 
         # Check if liqs is None before trying to use .get()
         if liqs is None:
-            scores["liq"] = 0.0
+            liqs = {}
         else:
             ll = liqs.get("long_liq", 0)
             sl2 = liqs.get("short_liq", 0)
