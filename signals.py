@@ -271,18 +271,25 @@ class SignalEngine:
         else:
             scores["ob"] = 0.7 if ob_imb<0.5 else (0.35 if ob_imb<0.77 else (-0.5 if ob_imb>1.7 else 0.1))
 
-        ll=liqs.get("long_liq",0); sl2=liqs.get("short_liq",0); tot=ll+sl2
-        if tot>0:
-            sdm=sl2/tot
-            if macro==1:
-                scores["liq"] = 1.0 if sdm>0.75 else (0.5 if sdm>0.55 else (-0.7 if sdm<0.25 else 0.0))
-            else:
-                scores["liq"] = 1.0 if sdm<0.25 else (0.5 if sdm<0.45 else (-0.7 if sdm>0.75 else 0.0))
-        else:
+       
+
+        # Check if liqs is None before trying to use .get()
+        if liqs is None:
             scores["liq"] = 0.0
-
-        scores["learned"] = max(-0.5, min(0.5, learned_bias * float(macro)))
-
+        else:
+            ll = liqs.get("long_liq", 0)
+            sl2 = liqs.get("short_liq", 0)
+            tot = ll + sl2
+            if tot > 0:
+                sdm = sl2 / tot
+                if macro == 1:
+                    scores["liq"] = 1.0 if sdm > 0.75 else (0.5 if sdm > 0.55 else (-0.7 if sdm < 0.25 else 0.0))
+                else:
+                    scores["liq"] = 1.0 if sdm < 0.25 else (0.5 if sdm < 0.45 else (-0.7 if sdm > 0.75 else 0.0))
+            else:
+                scores["liq"] = 0.0
+            scores["learned"] = max(-0.5, min(0.5, learned_bias * float(macro)))
+                    
         # Weights
         # Weights retuned per weekly report analysis of 89 trades:
         # Orderbook +75%, 5m ST +38%, 5m MACD +40%, 3m cross +44%
