@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Bybit Compound — Live Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface2: #f8fafc;
+  --surface3: #eef1f6;
+  --border: #e2e8f0;
+  --border2: #d1dae8;
+
+  --blue: #2563eb;
+  --blue-soft: #eff6ff;
+  --blue-mid: #93c5fd;
+  --green: #16a34a;
+  --green-soft: #f0fdf4;
+  --green-mid: #86efac;
+  --red: #dc2626;
+  --red-soft: #fef2f2;
+  --red-mid: #fca5a5;
+  --yellow: #d97706;
+  --yellow-soft: #fffbeb;
+  --yellow-mid: #fcd34d;
+  --purple: #7c3aed;
+  --purple-soft: #f5f3ff;
+  --teal: #0d9488;
+  --teal-soft: #f0fdfa;
+
+  --text: #0f172a;
+  --text2: #334155;
+  --muted: #64748b;
+  --muted2: #94a3b8;
+
+  --r: 12px;
+  --r-sm: 8px;
+  --shadow: 0 1px 3px rgba(15,23,42,.06), 0 1px 2px rgba(15,23,42,.04);
+  --shadow-md: 0 4px 12px rgba(15,23,42,.08), 0 2px 4px rgba(15,23,42,.05);
+  --shadow-lg: 0 10px 30px rgba(15,23,42,.1), 0 4px 8px rgba(15,23,42,.06);
+
+  --font: 'DM Sans', system-ui, sans-serif;
+  --mono: 'DM Mono', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.5; }
+
+/* ── HEADER ── */
+.hdr {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: 60px;
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  box-shadow: var(--shadow);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.brand-icon {
+  width: 34px; height: 34px;
+  background: var(--blue);
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+}
+.brand-text { font-size: 16px; font-weight: 800; color: var(--text); letter-spacing: -0.5px; }
+.brand-text span { color: var(--blue); }
+
+.hstats { display: flex; gap: 4px; flex: 1; justify-content: center; flex-wrap: wrap; }
+.hs {
+  padding: 5px 14px;
+  border-radius: var(--r-sm);
+  text-align: center;
+  min-width: 80px;
+}
+.hs:hover { background: var(--surface2); }
+.hsl { font-size: 9px; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; }
+.hsv { font-size: 14px; font-weight: 700; margin-top: 1px; color: var(--text); }
+.hsv.neu { color: var(--blue); }
+.hsv.pos { color: var(--green); }
+.hsv.neg { color: var(--red); }
+
+.hdr-right { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+.upd-ts { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.live-pill {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--green-soft);
+  border: 1px solid var(--green-mid);
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 10px; font-weight: 600; color: var(--green);
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  animation: blink 1.5s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+.spin {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border2);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: sp .7s linear infinite;
+}
+@keyframes sp { to { transform: rotate(360deg); } }
+
+/* BADGE */
+.badge { padding: 3px 9px; border-radius: 20px; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; }
+.bg { background: var(--green-soft); color: var(--green); border: 1px solid var(--green-mid); }
+.br { background: var(--red-soft); color: var(--red); border: 1px solid var(--red-mid); }
+.by { background: var(--yellow-soft); color: var(--yellow); border: 1px solid var(--yellow-mid); }
+.bb { background: var(--blue-soft); color: var(--blue); border: 1px solid var(--blue-mid); }
+.bp { background: var(--purple-soft); color: var(--purple); border: 1px solid #c4b5fd; }
+
+/* ── EPOCH BAR ── */
+.epoch-bar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 24px;
+}
+.epoch-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.epoch-title { font-size: 12px; font-weight: 700; color: var(--blue); }
+.epoch-stake { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.etrack { display: flex; gap: 4px; }
+.eday {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: var(--surface3);
+}
+.eday.done { background: var(--green); }
+.eday.cur {
+  background: linear-gradient(90deg, var(--blue), #60a5fa);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+.epoch-ft { display: flex; justify-content: space-between; margin-top: 5px; font-size: 10px; color: var(--muted); }
+
+/* ── TABS ── */
+.tabs {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex; gap: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tab {
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 12px; font-weight: 600;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+  display: flex; align-items: center; gap: 6px;
+}
+.tab:hover { color: var(--text2); }
+.tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.tab-icon { font-size: 13px; }
+
+/* ── PANES ── */
+.pane { display: none; padding: 20px 24px; }
+.pane.active { display: block; }
+
+/* ── KPI GRID ── */
+.krow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow .15s;
+}
+.kpi:hover { box-shadow: var(--shadow-md); }
+.kpi-accent {
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  border-radius: var(--r) var(--r) 0 0;
+}
+.kpi.ac .kpi-accent { background: var(--blue); }
+.kpi.ag .kpi-accent { background: var(--green); }
+.kpi.ar .kpi-accent { background: var(--red); }
+.kpi.ay .kpi-accent { background: var(--yellow); }
+.kpi.ap .kpi-accent { background: var(--purple); }
+.kpi.at .kpi-accent { background: var(--teal); }
+.kl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; margin-bottom: 6px; }
+.kv { font-size: 24px; font-weight: 800; line-height: 1; color: var(--text); letter-spacing: -0.5px; }
+.ks { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.pos { color: var(--green) !important; }
+.neg { color: var(--red) !important; }
+.neu { color: var(--blue) !important; }
+.ylw { color: var(--yellow) !important; }
+
+/* ── CARDS ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.ctitle {
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.7px;
+  margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.ctitle-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  animation: blink 1.5s infinite;
+}
+
+/* ── GRID LAYOUTS ── */
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+@media(max-width: 900px) { .g2, .g3 { grid-template-columns: 1fr; } }
+
+/* ── TABLES ── */
+.tw { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 700px; }
+.tbl th {
+  text-align: left; padding: 10px 12px;
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.7px;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+.tbl td { padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tbl tr:hover td { background: var(--surface2); }
+.tbl tr.lr td:first-child { border-left: 3px solid var(--green); }
+.tbl tr.sr td:first-child { border-left: 3px solid var(--red); }
+
+/* ── TAGS ── */
+.tag {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 5px;
+  font-size: 10px; font-weight: 700;
+  font-family: var(--mono);
+}
+.tg { background: var(--green-soft); color: var(--green); }
+.tr2 { background: var(--red-soft); color: var(--red); }
+.tb { background: var(--blue-soft); color: var(--blue); }
+.ty { background: var(--yellow-soft); color: var(--yellow); }
+.tp { background: var(--purple-soft); color: var(--purple); }
+
+/* ── BANNERS ── */
+.err {
+  background: var(--red-soft);
+  border: 1px solid var(--red-mid);
+  border-radius: var(--r-sm);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  font-size: 12px; color: var(--red);
+  display: flex; align-items: center; gap: 8px;
+}
+.ok-banner {
+  background: var(--green-soft);
+  border: 1px solid var(--green-mid);
+  border-radius: var(--r-sm);
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  font-size: 12px; color: var(--green);
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* ── SECTION HEADER ── */
+.sec-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 14px;
+}
+.sec-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.sec-sub { font-size: 11px; color: var(--muted); }
+
+/* ── FILTER ROW ── */
+.filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fsel, .finput {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-family: var(--font);
+  outline: none;
+}
+.fsel:focus, .finput:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+.finput { width: 120px; }
+.finput::placeholder { color: var(--muted2); }
+
+/* ── SAVE BTN ── */
+.btn-save {
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 7px 16px;
+  font-size: 12px; font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font);
+  display: flex; align-items: center; gap: 6px;
+  transition: background .15s;
+}
+.btn-save:hover { background: #1d4ed8; }
+
+/* ── PARAM GRID ── */
+.param-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px;
+}
+.param-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; margin-bottom: 8px; }
+.param-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  font-size: 13px; font-weight: 600;
+  font-family: var(--mono);
+  outline: none;
+}
+.param-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+.param-desc { font-size: 10px; color: var(--muted2); margin-top: 5px; }
+
+/* ── WHALE DETAIL CARD ── */
+.whale-sym-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px;
+  min-width: 140px;
+  transition: box-shadow .15s;
+}
+.whale-sym-card:hover { box-shadow: var(--shadow-md); }
+
+/* ── SCAN PILL ── */
+.scan-pill {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+
+/* ── LADDER ── */
+.ladder-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  margin-bottom: 6px;
+  background: var(--surface2);
+  transition: background .15s;
+}
+.ladder-row:hover { background: var(--blue-soft); }
+.ladder-row.cur { border-color: var(--blue); background: var(--blue-soft); }
+.ladder-row.done { border-color: var(--green-mid); background: var(--green-soft); }
+.ladder-ep { font-size: 10px; color: var(--muted); font-family: var(--mono); width: 36px; }
+.ladder-bar { flex: 1; height: 5px; background: var(--surface3); border-radius: 3px; overflow: hidden; }
+.ladder-fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
+.ladder-lbl { font-size: 11px; font-weight: 600; white-space: nowrap; font-family: var(--mono); }
+
+/* ── CHART OPTS ── */
+.chart-opts {
+  --co-x: rgba(100,116,139,.2);
+  --co-x-tick: #94a3b8;
+}
+
+/* ── PROGRESS BAR ── */
+.prog-bar { height: 6px; background: var(--surface3); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+.prog-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--blue), #60a5fa); transition: width .5s ease; }
+
+/* ── EMPTY STATE ── */
+.empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.empty-icon { font-size: 32px; margin-bottom: 10px; opacity: .5; }
+
+/* ── INFO GUIDE ── */
+.guide-row { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+.guide-row:last-child { border-bottom: none; }
+.guide-key { font-family: var(--mono); font-weight: 600; color: var(--blue); }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header class="hdr">
+  <div class="brand">
+    <div class="brand-icon">⚡</div>
+    <div class="brand-text"><span>COMPOUND</span>BOT</div>
+  </div>
+
+  <div class="hstats">
+    <div class="hs">
+      <div class="hsl">Epoch</div>
+      <div class="hsv neu" id="h-ep">—</div>
+    </div>
+    <div class="hs">
+      <div class="hsl">Balance</div>
+      <div class="hsv" id="h-bal">—</div>
+    </div>
+    <div class="hs">
+      <div class="hsl">Target</div>
+      <div class="hsv" id="h-tgt">—</div>
+    </div>
+    <div class="hs">
+      <div class="hsl">Today PnL</div>
+      <div class="hsv" id="h-today">—</div>
+    </div>
+    <div class="hs">
+      <div class="hsl">Win Rate</div>
+      <div class="hsv" id="h-wr">—</div>
+    </div>
+    <div class="hs">
+      <div class="hsl">Positions</div>
+      <div class="hsv neu" id="h-pos">—</div>
+    </div>
+    <div class="hs">
+      <div class="hsl">Mode</div>
+      <div class="hsv" id="h-mode">—</div>
+    </div>
+  </div>
+
+  <div class="hdr-right">
+    <span class="upd-ts" id="upd-ts">—</span>
+    <div class="live-pill">
+      <div class="live-dot"></div> LIVE
+    </div>
+    <div class="spin" id="spin" style="display:none"></div>
+  </div>
+</header>
+
+<!-- ── EPOCH BAR ── -->
+<div class="epoch-bar">
+  <div class="epoch-hdr">
+    <span class="epoch-title" id="ep-label">Epoch 1 — Day 1 of 5</span>
+    <span class="epoch-stake" id="ep-stake">—</span>
+  </div>
+  <div class="etrack" id="ep-track">
+    <div class="eday cur"></div>
+    <div class="eday"></div><div class="eday"></div><div class="eday"></div><div class="eday"></div>
+  </div>
+  <div class="epoch-ft">
+    <span id="ep-pct">0% reached</span>
+    <span id="ep-left">— days left</span>
+  </div>
+</div>
+
+<!-- ── TABS ── -->
+<nav class="tabs">
+  <div class="tab active" onclick="switchTab('overview')">
+    <span class="tab-icon">📊</span> Overview
+  </div>
+  <div class="tab" onclick="switchTab('positions')">
+    <span class="tab-icon">🎯</span> Positions
+  </div>
+  <div class="tab" onclick="switchTab('history')">
+    <span class="tab-icon">📋</span> History
+  </div>
+  <div class="tab" onclick="switchTab('whale')">
+    <span class="tab-icon">🐋</span> Whale Intel
+  </div>
+  <div class="tab" onclick="switchTab('epochs')">
+    <span class="tab-icon">🔄</span> Epochs
+  </div>
+  <div class="tab" onclick="switchTab('growth')">
+    <span class="tab-icon">🚀</span> Growth
+  </div>
+  <div class="tab" onclick="switchTab('assets')">
+    <span class="tab-icon">🔥</span> Hot Assets
+  </div>
+  <div class="tab" onclick="switchTab('params')">
+    <span class="tab-icon">⚙</span> Params
+  </div>
+</nav>
+
+<!-- ════ OVERVIEW ════ -->
+<div class="pane active" id="pane-overview">
+  <div id="ovw-banner"></div>
+  <div class="krow">
+    <div class="kpi ag">
+      <div class="kpi-accent"></div>
+      <div class="kl">Live Balance</div>
+      <div class="kv" id="k-bal">—</div>
+      <div class="ks" id="k-bals">—</div>
+    </div>
+    <div class="kpi ag">
+      <div class="kpi-accent"></div>
+      <div class="kl">Total PnL</div>
+      <div class="kv" id="k-pnl">—</div>
+      <div class="ks" id="k-pnls">—</div>
+    </div>
+    <div class="kpi ac">
+      <div class="kpi-accent"></div>
+      <div class="kl">Today PnL</div>
+      <div class="kv" id="k-today">—</div>
+      <div class="ks" id="k-todayt">—</div>
+    </div>
+    <div class="kpi ay">
+      <div class="kpi-accent"></div>
+      <div class="kl">Win Rate</div>
+      <div class="kv" id="k-wr">—</div>
+      <div class="ks" id="k-wl">—</div>
+    </div>
+    <div class="kpi ac">
+      <div class="kpi-accent"></div>
+      <div class="kl">Total Trades</div>
+      <div class="kv" id="k-trades">—</div>
+      <div class="ks">all time</div>
+    </div>
+    <div class="kpi at">
+      <div class="kpi-accent"></div>
+      <div class="kl">Open Positions</div>
+      <div class="kv neu" id="k-open">—</div>
+      <div class="ks" id="k-unr">—</div>
+    </div>
+    <div class="kpi ap">
+      <div class="kpi-accent"></div>
+      <div class="kl">Streak</div>
+      <div class="kv" id="k-streak">—</div>
+      <div class="ks" id="k-streaks">—</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-accent" style="background:var(--teal)"></div>
+      <div class="kl">Target EOD</div>
+      <div class="kv neu" id="k-tgt">—</div>
+      <div class="ks" id="k-tgts">—</div>
+    </div>
+  </div>
+
+  <div class="g2">
+    <div class="card">
+      <div class="ctitle">
+        Balance vs Target
+        <div class="ctitle-dot"></div>
+      </div>
+      <canvas id="cBal" height="180"></canvas>
+    </div>
+    <div class="card">
+      <div class="ctitle">Hourly PnL (48h)</div>
+      <canvas id="cHourly" height="180"></canvas>
+    </div>
+  </div>
+
+  <div class="g2">
+    <div class="card">
+      <div class="ctitle">🐋 Whale Market Bias</div>
+      <div id="whale-mini" style="font-size:12px;color:var(--muted)">Loading...</div>
+    </div>
+    <div class="card">
+      <div class="ctitle">🔥 Scanning Now</div>
+      <div id="scan-pills" style="display:flex;flex-wrap:wrap;gap:6px;padding-top:2px">
+        <span style="color:var(--muted);font-size:12px">Loading...</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ POSITIONS ════ -->
+<div class="pane" id="pane-positions">
+  <div class="sec-hdr">
+    <span class="sec-title">Live Open Positions</span>
+    <span class="sec-sub" id="pos-ts">—</span>
+  </div>
+  <div class="krow" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi ac">
+      <div class="kpi-accent"></div>
+      <div class="kl">Open Count</div>
+      <div class="kv neu" id="p-cnt">0</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-accent" style="background:var(--teal)"></div>
+      <div class="kl">Unrealised PnL</div>
+      <div class="kv" id="p-unr">$0.00</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-accent" style="background:var(--muted2)"></div>
+      <div class="kl">Total Notional</div>
+      <div class="kv" id="p-not">$0.00</div>
+    </div>
+    <div class="kpi ay">
+      <div class="kpi-accent"></div>
+      <div class="kl">Avg Confidence</div>
+      <div class="kv" id="p-conf">—</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="tw">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Dir</th><th>Entry</th><th>Current</th><th>Unr PnL</th>
+            <th>PnL%</th><th>Qty</th><th>Notional</th><th>Lev</th><th>SL</th><th>TP</th>
+            <th>Conf</th><th>Epoch</th><th>Duration</th><th>Mode</th>
+          </tr>
+        </thead>
+        <tbody id="pos-body">
+          <tr><td colspan="15" class="empty-state">
+            <div class="empty-icon">📡</div>
+            Auto-refreshing every 10s…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════ HISTORY ════ -->
+<div class="pane" id="pane-history">
+  <div class="sec-hdr">
+    <span class="sec-title">Trade History</span>
+    <div class="filter-row">
+      <select id="h-hrs" onchange="loadHist()" class="fsel">
+        <option value="6">Last 6h</option>
+        <option value="24" selected>Last 24h</option>
+        <option value="72">Last 72h</option>
+        <option value="168">Last 7d</option>
+        <option value="720">Last 30d</option>
+      </select>
+      <input id="h-sym" type="text" placeholder="Symbol…" onchange="loadHist()" class="finput">
+    </div>
+  </div>
+  <div class="krow" style="grid-template-columns:repeat(5,1fr)">
+    <div class="kpi"><div class="kpi-accent" style="background:var(--muted2)"></div><div class="kl">Trades</div><div class="kv" id="hk-n">0</div></div>
+    <div class="kpi ag"><div class="kpi-accent"></div><div class="kl">PnL</div><div class="kv" id="hk-pnl">$0.00</div></div>
+    <div class="kpi ay"><div class="kpi-accent"></div><div class="kl">Win Rate</div><div class="kv" id="hk-wr">0%</div></div>
+    <div class="kpi"><div class="kpi-accent" style="background:var(--green)"></div><div class="kl">Wins</div><div class="kv pos" id="hk-w">0</div></div>
+    <div class="kpi ar"><div class="kpi-accent"></div><div class="kl">Losses</div><div class="kv neg" id="hk-l">0</div></div>
+  </div>
+  <div class="card">
+    <div class="tw">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Time</th><th>Ep</th><th>Symbol</th><th>Dir</th><th>Entry</th><th>Exit</th>
+            <th>PnL</th><th>PnL%</th><th>Outcome</th><th>Qty</th><th>Lev</th><th>Mode</th><th>Duration</th><th>Conf</th>
+          </tr>
+        </thead>
+        <tbody id="hist-body">
+          <tr><td colspan="14" class="empty-state">Select a period above to load history</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════ WHALE INTEL ════ -->
+<div class="pane" id="pane-whale">
+  <div class="sec-hdr">
+    <span class="sec-title">🐋 Smart Money / Whale Intelligence</span>
+    <span class="sec-sub" id="whale-age">Updates every hour</span>
+  </div>
+  <div class="krow" style="grid-template-columns:repeat(3,1fr)">
+    <div class="kpi ac"><div class="kpi-accent"></div><div class="kl">Market Bias</div><div class="kv" id="wh-bias">—</div></div>
+    <div class="kpi ag"><div class="kpi-accent"></div><div class="kl">Short Squeezes</div><div class="kv pos" id="wh-sq">—</div></div>
+    <div class="kpi ar"><div class="kpi-accent"></div><div class="kl">Long Flushes</div><div class="kv neg" id="wh-lf">—</div></div>
+  </div>
+  <div class="card">
+    <div class="ctitle">Top Whale-Backed Opportunities</div>
+    <div id="whale-opps">
+      <p style="color:var(--muted);font-size:12px">Run <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;color:var(--blue)">force_whale_update</code> in Claude Desktop to populate whale data.</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ctitle">Symbol Whale Detail <span style="color:var(--muted2);font-size:9px;font-weight:400">from last hourly scan</span></div>
+    <div id="whale-detail" style="display:flex;flex-wrap:wrap;gap:10px">
+      <p style="color:var(--muted);font-size:12px">No data yet. Updates hourly after start_trading.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════ EPOCHS ════ -->
+<div class="pane" id="pane-epochs">
+  <div class="g2">
+    <div class="card">
+      <div class="ctitle">Epoch History</div>
+      <div class="tw">
+        <table class="tbl" style="min-width:480px">
+          <thead>
+            <tr><th>Epoch</th><th>Start</th><th>Target</th><th>End Bal</th><th>Gain</th><th>Trades</th><th>Win%</th><th>Status</th></tr>
+          </thead>
+          <tbody id="epoch-body">
+            <tr><td colspan="8" class="empty-state">Loading epoch history…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ctitle">Compound Ladder</div>
+      <div id="ladder">
+        <div style="color:var(--muted);font-size:12px">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ GROWTH ════ -->
+<div class="pane" id="pane-growth">
+  <div class="g3" style="margin-bottom:14px">
+    <div class="kpi ag"><div class="kpi-accent"></div><div class="kl">Balance</div><div class="kv pos" id="g-bal">—</div></div>
+    <div class="kpi ac"><div class="kpi-accent"></div><div class="kl">Epoch Target</div><div class="kv neu" id="g-tgt">—</div></div>
+    <div class="kpi ay"><div class="kpi-accent"></div><div class="kl">Daily Required</div><div class="kv ylw">14.87%</div></div>
+    <div class="kpi ay"><div class="kpi-accent"></div><div class="kl">Progress</div><div class="kv" id="g-prog">—</div></div>
+    <div class="kpi"><div class="kpi-accent" style="background:var(--muted2)"></div><div class="kl">Days Left</div><div class="kv" id="g-days">—</div></div>
+    <div class="kpi ap"><div class="kpi-accent"></div><div class="kl">Epoch</div><div class="kv" id="g-ep">—</div></div>
+  </div>
+  <div class="card">
+    <div class="ctitle">Balance vs Target Curve</div>
+    <canvas id="cGrowth" height="220"></canvas>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div class="ctitle">Compound Projection (10 Epochs)</div>
+    <div class="tw">
+      <table class="tbl" style="min-width:380px">
+        <thead>
+          <tr><th>Epoch</th><th>Start $</th><th>Target $</th><th>Day</th><th>Multiple</th></tr>
+        </thead>
+        <tbody id="proj-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════ HOT ASSETS ════ -->
+<div class="pane" id="pane-assets">
+  <div class="g2">
+    <div class="card">
+      <div class="ctitle">Volatility Leaderboard</div>
+      <table class="tbl" style="min-width:340px">
+        <thead>
+          <tr><th>#</th><th>Symbol</th><th>24h Range</th><th>24h Chg</th><th>Score</th><th>Vol $M</th></tr>
+        </thead>
+        <tbody id="vol-body">
+          <tr><td colspan="6" class="empty-state">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="ctitle">Per-Symbol P&amp;L</div>
+      <table class="tbl" style="min-width:340px">
+        <thead>
+          <tr><th>Symbol</th><th>W</th><th>L</th><th>Win%</th><th>PnL</th><th>Bias</th></tr>
+        </thead>
+        <tbody id="sym-body">
+          <tr><td colspan="6" class="empty-state">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════ PARAMS ════ -->
+<div class="pane" id="pane-params">
+  <div class="sec-hdr">
+    <span class="sec-title">Strategy Parameters</span>
+    <button onclick="saveParams()" class="btn-save">💾 Save Parameters</button>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px" id="pgrid">
+    <div style="color:var(--muted);font-size:12px">Loading…</div>
+  </div>
+  <div class="card">
+    <div class="ctitle">Risk Management Guide</div>
+    <div class="guide-row"><span class="guide-key">epoch_max_dd_pct</span> — Halts trading if epoch balance drops this % (default 35%)</div>
+    <div class="guide-row"><span class="guide-key">daily_max_dd_pct</span> — Halts if today's loss exceeds this % (default 25%)</div>
+    <div class="guide-row"><span class="guide-key">vol_scan_n</span> — Symbols scanned per cycle. Auto-sized by balance.</div>
+    <div class="guide-row"><span class="guide-key">scan_interval_s</span> — Seconds between full scans (default 30s)</div>
+    <div class="guide-row"><span class="guide-key">Modes</span> — NORMAL (8 pos, 10% risk) → AGGRESSIVE (12 pos, 15%) → TURBO (16 pos, 20%)</div>
+  </div>
+</div>
+
+<!-- ── SCRIPTS ── -->
+<script>
+'use strict';
+
+const API  = '';
+const CH   = {};
+const TABS = ['overview','positions','history','whale','epochs','growth','assets','params'];
+let activeTab  = 'overview';
+let lastOvData = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const f2  = (v, d=2) => v == null ? '—' : (+v).toFixed(d);
+const fTs = ts => new Date(ts*1e3).toLocaleTimeString();
+const fDt = ts => new Date(ts*1e3).toLocaleString('en-GB',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const fDr = s  => { if(!s) return '—'; if(s<60) return s+'s'; if(s<3600) return ~~(s/60)+'m'; return ~~(s/3600)+'h '+~~(s%3600/60)+'m'; };
+const clr = v  => +v > 0 ? 'pos' : +v < 0 ? 'neg' : '';
+const pnlStr = v => { v=+v; return v>0?`<span class="pos">+$${f2(v)}</span>`:v<0?`<span class="neg">-$${f2(Math.abs(v))}</span>`:'<span>$0.00</span>'; };
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+async function apiFetch(path) {
+  try {
+    const r = await fetch(API + path, {cache:'no-store'});
+    if (!r.ok) { console.warn('API', path, r.status); return null; }
+    return await r.json();
+  } catch(e) { console.warn('API error', path, e.message); return null; }
+}
+
+// ── Tab switch ────────────────────────────────────────────────────────────────
+function switchTab(n) {
+  activeTab = n;
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', TABS[i]===n));
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('pane-'+n).classList.add('active');
+  if(n==='positions') loadPos();
+  else if(n==='history')  loadHist();
+  else if(n==='whale')    loadWhale();
+  else if(n==='epochs')   loadEpochs();
+  else if(n==='growth')   loadGrowth();
+  else if(n==='assets')   loadAssets();
+  else if(n==='params')   loadParams();
+}
+
+// ── Banner helpers ────────────────────────────────────────────────────────────
+function showErr(msg) {
+  const el = document.getElementById('ovw-banner');
+  if(el) el.innerHTML = `<div class="err">⚠ ${msg}</div>`;
+}
+function showOk(msg) {
+  const el = document.getElementById('ovw-banner');
+  if(el) el.innerHTML = `<div class="ok-banner">✓ ${msg}</div>`;
+  setTimeout(()=>{ if(el) el.innerHTML=''; }, 5000);
+}
+function clearBanner() {
+  const el = document.getElementById('ovw-banner');
+  if(el) el.innerHTML='';
+}
+
+// ── setKV ─────────────────────────────────────────────────────────────────────
+function setKV(id, txt, cls, baseClass='kv') {
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.textContent = txt;
+  el.className = baseClass + (cls ? ' '+cls : '');
+}
+
+// ── Chart Options ─────────────────────────────────────────────────────────────
+const CO = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { display: false } },
+  scales: {
+    x: {
+      ticks: { color: '#94a3b8', maxTicksLimit: 8, font: { size: 9, family: "'DM Mono'" } },
+      grid: { color: 'rgba(226,232,240,.8)' }
+    },
+    y: {
+      ticks: { color: '#94a3b8', font: { size: 9, family: "'DM Mono'" } },
+      grid: { color: 'rgba(226,232,240,.8)' }
+    }
+  }
+};
+
+// ── OVERVIEW ──────────────────────────────────────────────────────────────────
+async function loadOverview() {
+  document.getElementById('spin').style.display='block';
+  const [ov, hr] = await Promise.all([apiFetch('/api/overview'), apiFetch('/api/hourly')]);
+  document.getElementById('spin').style.display='none';
+  document.getElementById('upd-ts').textContent = new Date().toLocaleTimeString();
+
+  if(!ov) {
+    showErr('Cannot reach API. If engine just started, wait 30 seconds and refresh.');
+    return;
+  }
+  clearBanner();
+  lastOvData = ov;
+
+  const s = ov.stats    || {};
+  const c = ov.compound || {};
+  const est  = ov.est_balance || 0;
+  const init = ov.initial    || 0;
+  const mode = c.mode || 'NORMAL';
+  const isRunning = ov.engine_status === 'RUNNING';
+
+  if(est===0 && init===0) {
+    showErr('Engine not started or balance not detected. Run start_trading in Claude Desktop.');
+  } else if(!isRunning) {
+    showErr('Engine status: '+(ov.engine_status||'IDLE')+'. Run start_trading in Claude Desktop.');
+  }
+
+  // Header stats
+  const ep = c.epoch_num || 1;
+  document.getElementById('h-ep').textContent = 'Ep'+ep;
+  setKV('h-bal', '$'+f2(est), clr(est-init), 'hsv');
+  document.getElementById('h-tgt').textContent = '$'+f2(c.epoch_target||0);
+  setKV('h-today', (+(s.today_pnl||0)>=0?'+':'')+'$'+f2(s.today_pnl||0), clr(s.today_pnl), 'hsv');
+  document.getElementById('h-wr').textContent = (s.win_rate||0)+'%';
+  document.getElementById('h-pos').textContent = s.open_positions||0;
+  const mc = {NORMAL:'bb',AGGRESSIVE:'bg',TURBO:'bp'};
+  const mb = document.getElementById('h-mode');
+  mb.textContent = mode;
+  mb.className = 'hsv badge '+(mc[mode]||'bb');
+
+  // Epoch bar
+  const day = c.day_in_epoch || 1;
+  document.getElementById('ep-label').textContent = `Epoch ${ep} — Day ${day} of 5`;
+  document.getElementById('ep-stake').textContent  = `$${f2(c.epoch_start_bal)} → $${f2(c.epoch_target)}`;
+  const tr = document.getElementById('ep-track');
+  tr.innerHTML = '';
+  for(let i=1;i<=5;i++) {
+    const d = document.createElement('div');
+    d.className = 'eday'+(i<day?' done':i===day?' cur':'');
+    tr.appendChild(d);
+  }
+  const prog = Math.max(0, Math.min(100, c.epoch_progress_pct||0));
+  document.getElementById('ep-pct').textContent = f2(prog,1)+'% of target reached';
+  const aheadStr = (c.ahead_pct||0)>=0 ? '+'+f2(c.ahead_pct,1)+'% vs track' : f2(c.ahead_pct,1)+'% behind track';
+  document.getElementById('ep-left').textContent = f2(c.days_remaining||5,1)+' days left | '+aheadStr;
+
+  // KPIs
+  setKV('k-bal', '$'+f2(est), clr(est-init));
+  document.getElementById('k-bals').textContent = 'initial $'+f2(init);
+  const tpnl = s.total_pnl||0;
+  setKV('k-pnl', (tpnl>=0?'+':'')+('$'+f2(tpnl)), clr(tpnl));
+  document.getElementById('k-pnls').textContent = init>0 ? f2(tpnl/init*100,1)+'% gain' : '—';
+  setKV('k-today', (+(s.today_pnl||0)>=0?'+':'')+'$'+f2(s.today_pnl||0), clr(s.today_pnl));
+  document.getElementById('k-todayt').textContent = (s.today_trades||0)+' trades today';
+  document.getElementById('k-wr').textContent = (s.win_rate||0)+'%';
+  document.getElementById('k-wl').textContent  = (s.wins||0)+' W / '+(s.losses||0)+' L';
+  document.getElementById('k-trades').textContent = s.total_trades||0;
+  document.getElementById('k-open').textContent   = s.open_positions||0;
+  document.getElementById('k-unr').textContent    = 'unrealised $'+f2(s.unrealised_pnl||0);
+  const str = c.streak||0;
+  setKV('k-streak', (str>0?'+':'')+str, str>0?'pos':str<0?'neg':'');
+  document.getElementById('k-streaks').textContent = str>0?'🔥 Win streak':str<0?'⚠ Loss streak':'Neutral';
+  setKV('k-tgt', '$'+f2(c.target_eod||c.epoch_target||0), 'neu');
+  setKV('k-tgts', c.on_track?'✓ On Track':'✗ Behind pace', c.on_track?'pos':'neg', 'ks');
+
+  buildBalanceChart();
+  if(hr && hr.snapshots) buildHourlyChart(hr.snapshots);
+
+  // Whale mini
+  const ws = ov.whale_summary || {};
+  const mc2 = {BULL:'pos',BEAR:'neg',MIXED:'ylw'};
+  const bias = ws.market_bias || 'NO DATA';
+  document.getElementById('whale-mini').innerHTML = `
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <span>Bias: <b class="${mc2[bias]||''}">${bias}</b></span>
+      <span>Squeezes: <span class="pos">${(ws.short_squeezes||[]).length}</span></span>
+      <span>Flushes: <span class="neg">${(ws.long_flushes||[]).length}</span></span>
+    </div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">
+      ${bias==='NO DATA'?'Run force_whale_update in Claude Desktop':'Hourly auto-update active ✓'}
+    </div>`;
+
+  loadScanPills();
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+async function buildBalanceChart() {
+  const d = await apiFetch('/api/capital-curve');
+  if(!d||!d.log||!d.log.length) return;
+  const log = d.log;
+  drawChart('cBal','line',
+    log.map(p=>new Date(p.ts*1e3).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})),
+    [
+      {label:'Balance',data:log.map(p=>p.balance),borderColor:'#16a34a',backgroundColor:'rgba(22,163,74,.06)',fill:true,tension:.4,pointRadius:0,borderWidth:2},
+      {label:'Target', data:log.map(p=>p.target), borderColor:'#2563eb',borderDash:[5,5],fill:false,tension:.3,pointRadius:0,borderWidth:1.5},
+    ], {legend:true});
+}
+
+function buildHourlyChart(snaps) {
+  drawChart('cHourly','bar',
+    snaps.map(s=>s.hour_label?s.hour_label.slice(11,16):''),
+    [{
+      data: snaps.map(s=>+(s.hourly_pnl||0)),
+      backgroundColor: snaps.map(s=>(+(s.hourly_pnl||0))>=0?'rgba(22,163,74,.7)':'rgba(220,38,38,.7)'),
+      borderRadius: 4
+    }]);
+}
+
+function drawChart(id, type, labels, datasets, opts={}) {
+  const ctx = document.getElementById(id);
+  if(!ctx) return;
+  if(CH[id]) { CH[id].destroy(); delete CH[id]; }
+  CH[id] = new Chart(ctx.getContext('2d'), {
+    type,
+    data: {
+      labels,
+      datasets: datasets.map(ds=>({
+        ...ds,
+        tension: ds.tension||.4,
+        pointRadius: ds.pointRadius??1,
+        borderWidth: ds.borderWidth||2,
+        backgroundColor: ds.bg||ds.backgroundColor||'transparent'
+      }))
+    },
+    options: {
+      ...CO,
+      plugins: {
+        ...CO.plugins,
+        legend: {
+          display: !!opts.legend,
+          labels: { color:'#64748b', boxWidth:10, font:{size:10,family:"'DM Mono'"} }
+        }
+      }
+    }
+  });
+}
+
+// ── Scan pills ────────────────────────────────────────────────────────────────
+async function loadScanPills() {
+  const d = await apiFetch('/api/symbols');
+  if(!d||!d.symbols) {
+    document.getElementById('scan-pills').innerHTML='<span style="color:var(--muted);font-size:12px">No data yet. Start trading first.</span>';
+    return;
+  }
+  const syms = (d.symbols||[]).slice(0,10);
+  if(!syms.length) {
+    document.getElementById('scan-pills').innerHTML='<span style="color:var(--muted);font-size:12px">Scanning…</span>';
+    return;
+  }
+  document.getElementById('scan-pills').innerHTML = syms.map(s=>`
+    <div class="scan-pill">
+      <b>${s.symbol.replace('USDT','')}</b>
+      <span class="ylw">±${f2(s.range_pct||0,1)}%</span>
+      <span class="${(s.chg_24h||0)>=0?'pos':'neg'}">${(s.chg_24h||0)>=0?'+':''}${f2(s.chg_24h||0,1)}%</span>
+    </div>`).join('');
+}
+
+// ── POSITIONS ─────────────────────────────────────────────────────────────────
+async function loadPos() {
+  const d = await apiFetch('/api/positions');
+  if(!d) return;
+  document.getElementById('pos-ts').textContent = 'Updated '+new Date().toLocaleTimeString();
+  const pos = d.positions||[];
+  document.getElementById('p-cnt').textContent = pos.length;
+  const unr = d.total_unrealised||0;
+  setKV('p-unr', (unr>=0?'+':'')+'$'+f2(unr), clr(unr));
+  document.getElementById('p-not').textContent = '$'+f2(d.total_notional||0,0);
+  const avg = pos.length ? Math.round(pos.reduce((a,p)=>a+(p.confidence||0),0)/pos.length) : 0;
+  document.getElementById('p-conf').textContent = avg ? avg+'%' : '—';
+
+  if(!pos.length) {
+    document.getElementById('pos-body').innerHTML = `<tr><td colspan="15"><div class="empty-state"><div class="empty-icon">📡</div>No open positions. Engine scanning…</div></td></tr>`;
+    return;
+  }
+  const now = Date.now()/1e3;
+  const mc = {NORMAL:'tb',AGGRESSIVE:'tg',TURBO:'tp'};
+  document.getElementById('pos-body').innerHTML = pos.map(p=>{
+    const iL = p.signal==='LONG'||p.side==='Buy';
+    const unrP = p.unrealised_pnl||0;
+    const dur  = Math.round(now-(p.ts_open||0));
+    const ep   = p.entry_price||0, cp = p.current_price||ep;
+    const pct  = ep>0 ? ((cp-ep)/ep*(iL?1:-1)*100) : 0;
+    const isPyr= (p.tag||'').includes('PYR');
+    return `<tr class="${iL?'lr':'sr'}">
+      <td><b>${p.symbol}</b>${isPyr?'<span class="tag ty" style="margin-left:4px;font-size:9px">PYR</span>':''}</td>
+      <td><span class="tag ${iL?'tg':'tr2'}">${iL?'LONG':'SHORT'}</span></td>
+      <td style="font-family:var(--mono)">$${f2(ep,4)}</td>
+      <td style="font-family:var(--mono)">${cp?'$'+f2(cp,4):'—'}</td>
+      <td class="${unrP>=0?'pos':'neg'}" style="font-weight:600">${unrP>=0?'+':''}$${f2(unrP)}</td>
+      <td class="${pct>=0?'pos':'neg'}">${pct>=0?'+':''}${f2(pct,2)}%</td>
+      <td style="font-family:var(--mono)">${f2(p.qty,3)}</td>
+      <td style="font-family:var(--mono)">$${f2(p.notional||0,2)}</td>
+      <td>${p.leverage||'—'}x</td>
+      <td class="neg" style="font-family:var(--mono)">$${f2(p.sl_price,4)}</td>
+      <td class="pos" style="font-family:var(--mono)">$${f2(p.tp_price,4)}</td>
+      <td>${p.confidence||'—'}%</td>
+      <td class="neu">Ep${p.epoch||1}</td>
+      <td style="color:var(--muted)">${fDr(dur)}</td>
+      <td><span class="tag ${mc[p.mode]||'tb'}" style="font-size:9px">${p.mode||'—'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── HISTORY ───────────────────────────────────────────────────────────────────
+async function loadHist() {
+  const h   = document.getElementById('h-hrs').value||'24';
+  const sym = (document.getElementById('h-sym').value||'').trim().toUpperCase()||'';
+  const d   = await apiFetch('/api/trades?hours='+h+(sym?'&symbol='+sym:''));
+  if(!d) return;
+  const ts    = d.trades||[];
+  const wins  = ts.filter(t=>t.outcome==='WIN').length;
+  const losses= ts.filter(t=>t.outcome==='LOSS').length;
+  const wr    = ts.length ? Math.round(wins/ts.length*100) : 0;
+  document.getElementById('hk-n').textContent  = ts.length;
+  setKV('hk-pnl', (+(d.pnl||0)>=0?'+':'')+'$'+f2(d.pnl||0), clr(d.pnl));
+  document.getElementById('hk-wr').textContent = wr+'%';
+  document.getElementById('hk-w').textContent  = wins;
+  document.getElementById('hk-l').textContent  = losses;
+
+  if(!ts.length) {
+    document.getElementById('hist-body').innerHTML=`<tr><td colspan="14"><div class="empty-state"><div class="empty-icon">📭</div>No trades in this period</div></td></tr>`;
+    return;
+  }
+  const mc = {NORMAL:'tb',AGGRESSIVE:'tg',TURBO:'tp'};
+  document.getElementById('hist-body').innerHTML = ts.map(t=>{
+    const iL = t.signal==='LONG'; const p2 = t.pnl_usdt||0; const pct = t.pnl_pct||0;
+    return `<tr class="${iL?'lr':'sr'}">
+      <td style="color:var(--muted);font-family:var(--mono)">${fDt(t.ts_open)}</td>
+      <td class="neu">Ep${t.epoch||1}</td>
+      <td><b>${t.symbol}</b></td>
+      <td><span class="tag ${iL?'tg':'tr2'}">${t.signal}</span></td>
+      <td style="font-family:var(--mono)">$${f2(t.entry_price,4)}</td>
+      <td style="font-family:var(--mono)">${t.exit_price?'$'+f2(t.exit_price,4):'open'}</td>
+      <td class="${p2>=0?'pos':'neg'}" style="font-weight:600">${p2>=0?'+':''}$${f2(p2)}</td>
+      <td class="${pct>=0?'pos':'neg'}">${pct>=0?'+':''}${f2(pct,2)}%</td>
+      <td><span class="tag ${t.outcome==='WIN'?'tg':t.outcome==='LOSS'?'tr2':'ty'}">${t.outcome||'OPEN'}</span></td>
+      <td style="font-family:var(--mono)">${f2(t.qty,3)}</td>
+      <td>${t.leverage||'—'}x</td>
+      <td><span class="tag ${mc[t.mode]||'tb'}" style="font-size:9px">${t.mode||'—'}</span></td>
+      <td style="color:var(--muted)">${fDr(t.duration_s)}</td>
+      <td>${t.confidence||'—'}%</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── WHALE ─────────────────────────────────────────────────────────────────────
+async function loadWhale() {
+  const d = await apiFetch('/api/whale');
+  if(!d) { document.getElementById('whale-opps').innerHTML='<p style="color:var(--muted);font-size:12px">API unavailable.</p>'; return; }
+  const s   = d.summary||{};
+  const mc  = {BULL:'pos',BEAR:'neg',MIXED:'ylw'};
+  const bias= s.market_bias||'—';
+  setKV('wh-bias', bias, mc[bias]||'');
+  document.getElementById('wh-sq').textContent = (s.short_squeezes||[]).join(', ')||'None';
+  document.getElementById('wh-lf').textContent = (s.long_flushes||[]).join(', ')||'None';
+  if(d.age_minutes!=null) document.getElementById('whale-age').textContent='Updated '+d.age_minutes+'m ago';
+
+  const opps = d.opportunities||[];
+  if(!opps.length) {
+    document.getElementById('whale-opps').innerHTML='<p style="color:var(--muted);font-size:12px">No whale signals yet. Run <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;color:var(--blue)">force_whale_update</code> in Claude Desktop, then <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;color:var(--blue)">start_trading</code>.</p>';
+  } else {
+    document.getElementById('whale-opps').innerHTML=`
+      <table class="tbl" style="min-width:400px">
+        <thead><tr><th>Symbol</th><th>Direction</th><th>Whale Score</th><th>OI Trend</th><th>Cascade</th><th>Signals</th></tr></thead>
+        <tbody>${opps.map(o=>`<tr>
+          <td><b>${o.symbol}</b></td>
+          <td><span class="tag ${o.direction==='LONG'?'tg':'tr2'}">${o.direction}</span></td>
+          <td class="${+o.score>0?'pos':'neg'}" style="font-family:var(--mono)">${+o.score>0?'+':''}${f2(o.score,3)}</td>
+          <td style="color:var(--teal)">${o.oi_trend||'—'}</td>
+          <td class="${o.cascade==='SHORT_SQUEEZE'?'pos':o.cascade==='LONG_FLUSH'?'neg':''}">${o.cascade||'—'}</td>
+          <td>${o.signals||0}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  }
+
+  const cache = d.cache||{};
+  const syms  = Object.entries(cache).slice(0,16);
+  if(!syms.length) {
+    document.getElementById('whale-detail').innerHTML='<p style="color:var(--muted);font-size:12px">Runs 60 min after engine start.</p>';
+  } else {
+    document.getElementById('whale-detail').innerHTML=syms.map(([sym,v])=>{
+      const sc  = v.composite_score||0;
+      const pct = Math.min(100,Math.abs(sc)*100);
+      const col = sc>0?'var(--green)':sc<0?'var(--red)':'var(--muted)';
+      return `<div class="whale-sym-card">
+        <div style="font-weight:700;font-size:13px">${sym.replace('USDT','')}</div>
+        <div class="prog-bar" style="margin-top:6px">
+          <div class="prog-fill" style="width:${pct}%;background:${col}"></div>
+        </div>
+        <div style="font-size:11px;color:${col};margin-top:4px;font-weight:600">${sc>0?'+':''}${f2(sc,2)} ${sc>0?'BULL':'BEAR'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">${v.oi_trend||''} ${v.liq_cascade||''}</div>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ── EPOCHS ────────────────────────────────────────────────────────────────────
+async function loadEpochs() {
+  const d = await apiFetch('/api/overview');
+  if(!d) return;
+  const eps = d.epoch_history||[];
+  const est = d.est_balance||0;
+  const c   = d.compound||{};
+
+  document.getElementById('epoch-body').innerHTML = eps.length ? eps.map(e=>{
+    const isCur = !e.end_ts;
+    const gain  = e.end_bal ? ((e.end_bal-e.start_bal)/e.start_bal*100) : null;
+    return `<tr>
+      <td class="neu"><b>Ep${e.epoch_num}</b>${isCur?'<span class="tag tb" style="font-size:8px;margin-left:6px">ACTIVE</span>':''}</td>
+      <td style="font-family:var(--mono)">$${f2(e.start_bal)}</td>
+      <td class="neu" style="font-family:var(--mono)">$${f2(e.target_bal)}</td>
+      <td class="${e.end_bal?(e.end_bal>=e.target_bal?'pos':'neg'):''}" style="font-family:var(--mono)">${e.end_bal?'$'+f2(e.end_bal):isCur?'$'+f2(est):'—'}</td>
+      <td class="${gain!=null?(gain>=100?'pos':gain>=70?'ylw':'neg'):''}" style="font-weight:600">${gain!=null?(gain>=0?'+':'')+f2(gain,1)+'%':'—'}</td>
+      <td>${e.total_trades||0}</td>
+      <td>${e.win_rate?f2(e.win_rate,1)+'%':'—'}</td>
+      <td>${e.end_ts?`<span class="tag ${e.target_met?'tg':'tr2'}">${e.target_met?'✓ DOUBLED':'✗ MISSED'}</span>`:'<span class="tag tb">IN PROGRESS</span>'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="8"><div class="empty-state">No epoch data yet. Start trading first.</div></td></tr>';
+
+  const proj = d.projection||[];
+  document.getElementById('ladder').innerHTML = proj.slice(0,8).map(p=>{
+    const isDone = p.epoch < c.epoch_num;
+    const isCur  = p.epoch === c.epoch_num;
+    const pct    = isCur ? Math.min(100,Math.max(0,c.epoch_progress_pct||0)) : isDone ? 100 : 0;
+    return `<div class="ladder-row ${isCur?'cur':isDone?'done':''}">
+      <span class="ladder-ep">Ep${p.epoch}</span>
+      <div class="ladder-bar">
+        <div class="ladder-fill" style="width:${pct}%;background:${isDone?'var(--green)':isCur?'var(--blue)':'transparent'}"></div>
+      </div>
+      <span class="ladder-lbl" style="color:${isDone?'var(--green)':isCur?'var(--blue)':'var(--muted)'}">
+        $${f2(p.start)} → $${f2(p.target)}
+      </span>
+    </div>`;
+  }).join('');
+}
+
+// ── GROWTH ────────────────────────────────────────────────────────────────────
+async function loadGrowth() {
+  const d = await apiFetch('/api/overview');
+  if(!d) return;
+  const c = d.compound||{}, est = d.est_balance||0, init = d.initial||0;
+  document.getElementById('g-bal').textContent  = '$'+f2(est);
+  document.getElementById('g-tgt').textContent  = '$'+f2(c.epoch_target);
+  document.getElementById('g-prog').textContent = f2(c.epoch_progress_pct||0,1)+'%';
+  document.getElementById('g-days').textContent = f2(c.days_remaining||5,1)+'d';
+  document.getElementById('g-ep').textContent   = '#'+(c.epoch_num||1);
+
+  const cr = await apiFetch('/api/capital-curve');
+  if(cr&&cr.log&&cr.log.length) {
+    const log = cr.log;
+    const ctx = document.getElementById('cGrowth').getContext('2d');
+    if(CH['cGrowth']) { CH['cGrowth'].destroy(); delete CH['cGrowth']; }
+    CH['cGrowth'] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: log.map(p=>new Date(p.ts*1e3).toLocaleString('en-GB',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})),
+        datasets: [
+          {label:'Balance',data:log.map(p=>p.balance),borderColor:'#16a34a',backgroundColor:'rgba(22,163,74,.06)',fill:true,tension:.4,pointRadius:0,borderWidth:2},
+          {label:'Target', data:log.map(p=>p.target), borderColor:'#2563eb',borderDash:[5,5],fill:false,tension:.3,pointRadius:0,borderWidth:1.5},
+        ]},
+      options:{...CO,plugins:{legend:{display:true,labels:{color:'#64748b',boxWidth:10,font:{size:10}}}}}
+    });
+  }
+
+  const proj = d.projection||[];
+  const initial = d.initial||10;
+  document.getElementById('proj-body').innerHTML = proj.map(p=>`<tr>
+    <td class="neu" style="font-family:var(--mono)"><b>Ep${p.epoch}</b></td>
+    <td style="font-family:var(--mono)">$${f2(p.start)}</td>
+    <td class="${p.epoch<=(c.epoch_num||1)?'pos':''}" style="font-family:var(--mono)">$${f2(p.target)}</td>
+    <td style="color:var(--muted)">Day ${p.days_elapsed}</td>
+    <td><span class="tag ${p.epoch<=(c.epoch_num||1)?'tg':'tb'}">${f2(p.target/initial,1)}×</span></td>
+  </tr>`).join('');
+}
+
+// ── ASSETS ────────────────────────────────────────────────────────────────────
+async function loadAssets() {
+  const d = await apiFetch('/api/symbols');
+  if(!d) return;
+  const syms = d.symbols||[];
+  document.getElementById('vol-body').innerHTML = syms.slice(0,15).map((s,i)=>`<tr>
+    <td style="color:var(--muted)">${i+1}</td>
+    <td><b>${s.symbol}</b></td>
+    <td class="ylw" style="font-family:var(--mono)">${f2(s.range_pct||0,1)}%</td>
+    <td class="${(s.chg_24h||0)>=0?'pos':'neg'}" style="font-family:var(--mono)">${(s.chg_24h||0)>=0?'+':''}${f2(s.chg_24h||0,1)}%</td>
+    <td style="font-family:var(--mono)">${f2(s.vol_score||0,0)}</td>
+    <td style="color:var(--muted);font-family:var(--mono)">${f2(s.vol_24h_m||0,0)}M</td>
+  </tr>`).join('')||'<tr><td colspan="6"><div class="empty-state">No scan data. Start trading first.</div></td></tr>';
+
+  document.getElementById('sym-body').innerHTML = syms.map(s=>{
+    const n=s.wins+s.losses; const wr=n>0?Math.round(s.wins/n*100):0; const b=s.learned_bias||0;
+    return `<tr>
+      <td><b>${s.symbol}</b></td>
+      <td class="pos">${s.wins||0}</td>
+      <td class="neg">${s.losses||0}</td>
+      <td>${n?wr+'%':'—'}</td>
+      <td class="${(s.total_pnl||0)>=0?'pos':'neg'}" style="font-weight:600;font-family:var(--mono)">${(s.total_pnl||0)>=0?'+':''}$${f2(s.total_pnl||0)}</td>
+      <td class="${b>0.1?'pos':b<-0.1?'neg':''}">${b>0.1?'↑ BULL':b<-0.1?'↓ BEAR':'~'}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="6"><div class="empty-state">No trades yet</div></td></tr>';
+}
+
+// ── PARAMS ────────────────────────────────────────────────────────────────────
+const PDEFS = [
+  {key:'epoch_max_dd_pct',label:'Epoch Max DD %',    desc:'Halt if epoch drops this % (default 35)'},
+  {key:'daily_max_dd_pct',label:'Daily Max DD %',    desc:'Halt if today loses this % (default 25)'},
+  {key:'vol_scan_n',       label:'Scan N Symbols',   desc:'Symbols per scan (auto-sized by balance)'},
+  {key:'scan_interval_s',  label:'Scan Interval (s)',desc:'Seconds between scans (default 30)'},
+];
+async function loadParams() {
+  const d = await apiFetch('/api/params');
+  if(!d) return;
+  document.getElementById('pgrid').innerHTML = PDEFS.map(p=>`
+    <div class="param-card">
+      <div class="param-label">${p.label}</div>
+      <input id="pp-${p.key}" value="${d[p.key]||''}" class="param-input">
+      <div class="param-desc">${p.desc}</div>
+    </div>`).join('');
+}
+async function saveParams() {
+  const body={};
+  PDEFS.forEach(p=>{const el=document.getElementById('pp-'+p.key);if(el)body[p.key]=el.value;});
+  const r = await fetch(API+'/api/params',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok) showOk('Parameters saved successfully!');
+  else showErr('Save failed — '+r.status);
+}
+
+// ── Refresh timers ────────────────────────────────────────────────────────────
+function startRefreshes() {
+  setInterval(async()=>{
+    await loadOverview();
+    if(activeTab==='positions') loadPos();
+  }, 15000);
+  setInterval(()=>{ if(activeTab==='positions') loadPos(); }, 10000);
+  setInterval(()=>{ if(activeTab==='history') loadHist(); }, 45000);
+  setInterval(()=>{ if(activeTab==='whale') loadWhale(); }, 300000);
+  setInterval(()=>{ if(activeTab==='assets') loadAssets(); }, 60000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async function init() {
+  await loadOverview();
+  await loadPos();
+  loadHist();
+  startRefreshes();
+})();
+</script>
+</body>
+</html>
