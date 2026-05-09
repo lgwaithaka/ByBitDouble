@@ -328,6 +328,10 @@ class QuantSignalEngine:
         thresh      = thresholds.get(mode, 0.25)
         conf_floor  = conf_floors.get(mode, 52)
 
+        # Add asset-class-specific floors in signals.py analyze():
+        if get_asset_class(sym) in ["MEME", "LAYER2", "DEFI"]:
+            conf_floor = max(35, conf_floor - 12)  # Lower floor for altcoins
+
         # Apply BTC macro gate: raise LONG conf floor by 15 if BTC is bearish 4H
         btc_penalized = False
         if macro==1 and btc_macro==-1:
