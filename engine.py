@@ -822,7 +822,7 @@ class CompoundTradingEngine:
             )
 
         logger.info(f"Engine START | ${self.balance:.4f} | mode={self.compound.state.mode} | target=${self.compound.state.epoch_target:.4f}")
-        scan_secs = int(gp("scan_interval_s","45"))
+        scan_secs = int(gp("scan_interval_s","99999999"))
         last_daily_hour = -1
 
         while self.running:
