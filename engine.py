@@ -552,7 +552,9 @@ class CompoundTradingEngine:
         # Medium: Asia main session (04-08 UTC) and pre-London (21-24 UTC)
         # Low: quiet hours (08-12 UTC) — raise conf floor, reduce symbols scanned
         _utc_h = datetime.now(timezone.utc).hour
-        if (_utc_h >= 12 and _utc_h < 21) or (_utc_h >= 0 and _utc_h < 4):
+        
+        # Corrected logic:
+        if (12 <= _utc_h < 21) or (0 <= _utc_h < 4) or (21 <= _utc_h < 24):
             liq_session  = "HIGH"
             liq_conf_adj = -2   # slightly easier entry during peak liquidity (deep books)
             liq_sym_adj  = 0
