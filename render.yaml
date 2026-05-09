@@ -44,3 +44,9 @@ services:
     envVars:
       - key: DB_PATH
         value: /data/compound.db
+
+
+  # 3. Enable auto-restart on crash
+  #    In render.yaml, add:
+    healthCheckPath: /health
+    healthCheckTimeout: 30
