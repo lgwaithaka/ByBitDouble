@@ -342,8 +342,6 @@ class QuantSignalEngine:
             corr = await self._get_btc_correlation(sym)  # New helper
             penalty = 15 if corr > 0.7 else 5  # Soft penalty for low-correlation alts
             conf_floor += penalty
-    
-            
             btc_penalized = True
             logger.debug(f"{sym}: BTC 4H bearish — LONG conf floor raised to {conf_floor}")
 
@@ -361,6 +359,16 @@ class QuantSignalEngine:
                 
                 # if avg_vol > 0 and cur_vol < avg_vol * 1.3:
                     #vol_gate_pass = False
+                # ── ADAPTIVE VOLUME GATE ───────────────────────────────────────
+                asset_class = get_asset_class(sym)  # Use helper from Fix 2
+                vol_threshold = 1.3 if asset_class in ("MAJOR", "L1") else 1.15
+                
+                if avg_vol > 0 and cur_vol < avg_vol * vol_threshold:
+                    # Only fail gate if volume is significantly below average
+                    # For altcoins, allow 15% below avg; for majors, require 30% surge
+                    vol_gate_pass = False
+
+                    
                     logger.debug(f"{sym}: Volume gate FAILED ({cur_vol:.0f} < {avg_vol*1.3:.0f})")
             except Exception:
                 pass
@@ -403,6 +411,28 @@ class QuantSignalEngine:
             "veto_reason": None if signal!="HOLD" else
                 f"comp={comp:.3f}<{thresh:.2f} or conf={confidence}<{conf_floor}",
         }
+
+        # ADD THIS BLOCK after conf_floor = conf_floors.get(mode, 68)
+        
+        # ── ASSET-CLASS ADAPTIVE CONFIDENCE FLOORS ──────────────────────
+        def get_asset_class(symbol: str) -> str:
+            """Categorize symbols for parameter tuning."""
+            sym = symbol.replace("USDT", "").upper()
+            if sym in ("BTC", "ETH"): return "MAJOR"
+            if sym in ("SOL", "AVAX", "DOT", "MATIC", "LINK", "UNI", "AAVE"): return "L1"
+            if any(x in sym for x in ("MEME", "PEPE", "FLOKI", "BONK", "WIF")): return "MEME"
+            if any(x in sym for x in ("ARB", "OP", "STRK", "ZK")): return "L2"
+            if any(x in sym for x in ("AAVE", "COMP", "MKR", "UNI", "SUSHI")): return "DEFI"
+            return "ALT"  # default
+        
+        asset_class = get_asset_class(sym)
+        
+        # Lower confidence floor for volatile/low-liquidity assets
+        if asset_class in ("MEME", "L2", "DEFI", "ALT"):
+            conf_floor = max(35, conf_floor - 12)  # e.g., 68 → 56
+        elif asset_class == "L1":
+            conf_floor = max(40, conf_floor - 8)   # e.g., 68 → 60
+        # MAJOR (BTC/ETH) keep original floor
 
 
 def sl_tp(side, entry, atr_val, k5m=None, k15m=None, sl_mult=1.8, tp_mult=2.8):
