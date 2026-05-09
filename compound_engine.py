@@ -239,6 +239,12 @@ class CompoundEngine:
         # Use fractional Kelly (0.4 of full Kelly is safe-aggressive)
         base = kelly_raw * 0.40
 
+        # In compound_engine.py compute_risk_pct():
+        if self.state.epoch_start_bal < 50:  # Micro-account mode
+            # Ensure minimum viable notional
+            min_risk = (5.5 * 1.2) / (self.state.epoch_start_bal * 20)  # 20x leverage
+            risk = max(risk, min_risk)  # Floor at minimum viable risk
+      
         # Layer 2: mode multiplier — no conservative
         # NORMAL is baseline, AGGRESSIVE and TURBO push harder
         mode_mult = {
