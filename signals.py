@@ -335,7 +335,15 @@ class QuantSignalEngine:
         # Apply BTC macro gate: raise LONG conf floor by 15 if BTC is bearish 4H
         btc_penalized = False
         if macro==1 and btc_macro==-1:
-            conf_floor += 15   # BTC bearish = altcoin LONGs need higher conviction
+            # conf_floor += 15   # BTC bearish = altcoin LONGs need higher conviction
+            # Only penalize if altcoin is highly correlated with BTC
+        # if macro==1 and btc_macro==-1:
+            # Check 7d correlation first (add to scanner.py)
+            corr = await self._get_btc_correlation(sym)  # New helper
+            penalty = 15 if corr > 0.7 else 5  # Soft penalty for low-correlation alts
+            conf_floor += penalty
+    
+            
             btc_penalized = True
             logger.debug(f"{sym}: BTC 4H bearish — LONG conf floor raised to {conf_floor}")
 
