@@ -346,8 +346,13 @@ class QuantSignalEngine:
                 vols = k5m[-21:,5]
                 avg_vol = vols[:-1].mean()  # 20-period average (exclude current candle)
                 cur_vol = vols[-1]
-                if avg_vol > 0 and cur_vol < avg_vol * 1.3:
+                # Make volume gate adaptive by asset class
+                vol_threshold = 1.3 if get_asset_class(sym) in ["BTC", "ETH"] else 1.15
+                if avg_vol > 0 and cur_vol < avg_vol * vol_threshold:
                     vol_gate_pass = False
+                
+                # if avg_vol > 0 and cur_vol < avg_vol * 1.3:
+                    #vol_gate_pass = False
                     logger.debug(f"{sym}: Volume gate FAILED ({cur_vol:.0f} < {avg_vol*1.3:.0f})")
             except Exception:
                 pass
