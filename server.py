@@ -41,6 +41,10 @@ TESTNET = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 mcp  = FastMCP("Bybit Compound Trader")
 _loop: Optional[asyncio.AbstractEventLoop] = None
 
+# 2. Add heartbeat monitoring (prevent silent failures)
+#    In server.py, add to main_loop():
+if time.time() - self.last_heartbeat_ts > 300:  # 5 min
+    await self._send_heartbeat()  # Ping Discord/Telegram webhook
 
 # ════════════════════════════════════════════════════════════════════════════
 # DASHBOARD REST API — served directly from the MCP server
