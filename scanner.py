@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class VScanner:
     """Volume scanner that identifies top movers by volume and volatility."""
     
-    def __init__(self, client):
+    def __init__(self, client=None, symbols=None):
         self.client = client
         self.top: List[Dict] = []
         self.last_scan = 0
