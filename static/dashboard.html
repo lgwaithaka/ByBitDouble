@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ByBitDouble — Trading Engine</title>
+<style>
+:root{--bg:#0d1117;--s1:#161b22;--s2:#1c2333;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
+--green:#3fb950;--red:#f04b5e;--blue:#58a6ff;--yellow:#d29922;--whale:#7c3aed;--accent:#ff7b72;
+--font:'Segoe UI',system-ui,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;line-height:1.5}
+.layout{display:flex;flex-direction:column;min-height:100vh}
+.header{background:var(--s1);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;justify-content:space-between;align-items:center}
+.hdr-title{font-size:18px;font-weight:800;letter-spacing:-.5px}
+.hdr-sub{font-size:10px;color:var(--muted)}
+.hdr-right{display:flex;align-items:center;gap:12px}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--green);animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.tabs{display:flex;background:var(--s1);border-bottom:1px solid var(--border);padding:0 16px;gap:2px;overflow-x:auto}
+.tab{padding:8px 14px;font-size:11px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab:hover{color:var(--text)}
+.body{flex:1;padding:12px 16px;overflow-y:auto}
+.panel{display:none}.panel.active{display:block}
+.krow{display:grid;gap:8px;margin-bottom:10px}
+.kpi{background:var(--s2);border:1px solid var(--border);border-radius:6px;padding:10px 12px}
+.kl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.kv{font-size:22px;font-weight:800;margin:2px 0}
+.ks{font-size:10px;color:var(--muted)}
+.card{background:var(--s2);border:1px solid var(--border);border-radius:6px;margin-bottom:8px}
+.card-hdr{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border)}
+.card-hdr h3{font-size:12px;font-weight:600}
+.card-body{padding:10px 12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tbl{width:100%;border-collapse:collapse;font-size:11px}
+.tbl th{text-align:left;padding:4px 6px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border)}
+.tbl td{padding:4px 6px;border-bottom:1px solid rgba(48,54,61,.5)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600}
+.tag-g{background:rgba(63,185,80,.15);color:var(--green)}
+.tag-r{background:rgba(240,75,94,.15);color:var(--red)}
+.tag-b{background:rgba(88,166,255,.15);color:var(--blue)}
+.tag-y{background:rgba(210,153,34,.15);color:var(--yellow)}
+.btn{background:var(--blue);color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px}
+.btn:hover{opacity:.85}
+.scroll-card{max-height:340px;overflow-y:auto}
+.empty{color:var(--muted);text-align:center;padding:20px}
+@media(max-width:768px){.grid2{grid-template-columns:1fr}.krow{grid-template-columns:repeat(2,1fr)!important}}
+</style>
+</head>
+<body>
+<div class="layout">
+<div class="header">
+  <div>
+    <div class="hdr-title">🐋 ByBit<span style="color:var(--whale)">Double</span></div>
+    <div class="hdr-sub">Whale Intelligence · Compound Trading · 24/7</div>
+  </div>
+  <div class="hdr-right">
+    <div class="pulse" id="pulse"></div>
+    <span style="font-size:11px;color:var(--muted)" id="status-text">Connecting...</span>
+    <button class="btn" onclick="refresh()">⟳ Refresh</button>
+    <span style="font-size:10px;color:var(--muted)" id="last-update">—</span>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="tab('overview',this)">📊 Overview</div>
+  <div class="tab" onclick="tab('signals',this)">⚡ Signals</div>
+  <div class="tab" onclick="tab('history',this)">📜 History</div>
+  <div class="tab" onclick="tab('whale',this)">🐋 Whale</div>
+  <div class="tab" onclick="tab('symbols',this)">📈 Symbols</div>
+  <div class="tab" onclick="tab('settings',this)">⚙ Settings</div>
+</div>
+
+<div class="body">
+
+<!-- OVERVIEW -->
+<div class="panel active" id="p-overview">
+  <div class="krow" style="grid-template-columns:repeat(5,1fr)">
+    <div class="kpi"><div class="kl">Balance</div><div class="kv" id="ov-bal">—</div><div class="ks" id="ov-mode">—</div></div>
+    <div class="kpi"><div class="kl">Epoch Target</div><div class="kv" id="ov-target">—</div><div class="ks" id="ov-ahead">—</div></div>
+    <div class="kpi"><div class="kl">Win Rate</div><div class="kv" id="ov-wr">—</div><div class="ks" id="ov-trades">—</div></div>
+    <div class="kpi"><div class="kl">Total PnL</div><div class="kv" id="ov-pnl">—</div><div class="ks" id="ov-today">—</div></div>
+    <div class="kpi"><div class="kl">Open</div><div class="kv" id="ov-open">—</div><div class="ks" id="ov-unr">—</div></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-hdr"><h3>📈 Open Positions</h3></div>
+      <div class="card-body scroll-card">
+        <table class="tbl"><thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th><th>PnL</th><th>Lev</th></tr></thead>
+        <tbody id="ov-pos"><tr><td colspan="6" class="empty">No open positions</td></tr></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hdr"><h3>🏛 Epoch History</h3></div>
+      <div class="card-body scroll-card">
+        <table class="tbl"><thead><tr><th>Ep</th><th>Start</th><th>End</th><th>Target</th><th>PnL</th><th>WR</th><th>Met</th></tr></thead>
+        <tbody id="ov-epochs"><tr><td colspan="7" class="empty">—</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SIGNALS -->
+<div class="panel" id="p-signals">
+  <div class="krow" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi"><div class="kl">Regime</div><div class="kv" id="sig-regime">—</div><div class="ks" id="sig-regime-lbl">—</div></div>
+    <div class="kpi"><div class="kl">Fear & Greed</div><div class="kv" id="sig-fg">—</div><div class="ks" id="sig-fgl">—</div></div>
+    <div class="kpi"><div class="kl">Conf Floor</div><div class="kv" id="sig-cf">—</div><div class="ks" id="sig-mode">—</div></div>
+    <div class="kpi"><div class="kl">Trading Window</div><div class="kv" id="sig-window" style="font-size:13px">—</div><div class="ks" id="sig-tw-status">—</div></div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><h3>⚡ Latest Scan</h3><span style="font-size:10px;color:var(--muted)" id="sig-ts">—</span></div>
+    <div class="card-body scroll-card">
+      <table class="tbl"><thead><tr><th>Symbol</th><th>Signal</th><th>Conf</th><th>Composite</th><th>Action</th><th>Vol OK</th><th>Whale</th><th>F&G</th></tr></thead>
+      <tbody id="sig-body"><tr><td colspan="8" class="empty">Waiting for scan...</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY -->
+<div class="panel" id="p-history">
+  <div class="card">
+    <div class="card-hdr"><h3>📜 Trade History (72h)</h3></div>
+    <div class="card-body scroll-card" style="max-height:600px">
+      <table class="tbl"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Outcome</th><th>Dur</th><th>Mode</th></tr></thead>
+      <tbody id="hist-body"><tr><td colspan="9" class="empty">No trades yet</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- WHALE -->
+<div class="panel" id="p-whale">
+  <div class="krow" style="grid-template-columns:repeat(5,1fr)">
+    <div class="kpi"><div class="kl">Market Bias</div><div class="kv" id="wh-bias">—</div></div>
+    <div class="kpi"><div class="kl">🟢 Bullish</div><div class="kv pos" id="wh-bull">0</div></div>
+    <div class="kpi"><div class="kl">🔴 Bearish</div><div class="kv neg" id="wh-bear">0</div></div>
+    <div class="kpi"><div class="kl">Symbols Tracked</div><div class="kv" id="wh-count">0</div></div>
+    <div class="kpi"><div class="kl">Short Squeezes</div><div class="kv" id="wh-squeeze">None</div></div>
+  </div>
+  <div class="krow" style="grid-template-columns:repeat(4,1fr)">
+    <div class="kpi"><div class="kl">Signals Fired</div><div class="kv" id="wh-signals">0</div></div>
+    <div class="kpi"><div class="kl">Strongest Bull</div><div class="kv pos" id="wh-sbull">—</div></div>
+    <div class="kpi"><div class="kl">Strongest Bear</div><div class="kv neg" id="wh-sbear">—</div></div>
+    <div class="kpi"><div class="kl">Last Update</div><div class="kv" id="wh-updated">—</div>
+      <button class="btn" style="margin-top:4px;font-size:10px;padding:2px 8px" onclick="forceWhaleUpdate()">⟳ Force Update</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-hdr"><h3>🐋 Top Whale Opportunities</h3></div>
+    <div class="card-body scroll-card">
+      <table class="tbl"><thead><tr>
+        <th>Symbol</th><th>Score</th><th>Bias</th><th>Signals</th>
+        <th>OI Δ%</th><th>Funding</th><th>Liq Net</th><th>OB Imb</th>
+        <th>L/S</th><th>Vol×</th>
+      </tr></thead>
+      <tbody id="wh-body"><tr><td colspan="10" class="empty">Waiting for whale scan...</td></tr></tbody></table>
+    </div>
+  </div>
+  <div class="card" style="margin-top:8px">
+    <div class="card-hdr"><h3>📊 All Tracked Symbols</h3></div>
+    <div class="card-body scroll-card" style="max-height:360px">
+      <table class="tbl"><thead><tr>
+        <th>Symbol</th><th>Score</th><th>Bias</th><th>Signals</th>
+        <th>OI Δ%</th><th>Funding</th><th>Liq Total</th><th>OB Imb</th>
+        <th>L/S</th><th>Vol×</th><th>Age</th>
+      </tr></thead>
+      <tbody id="wh-all-body"><tr><td colspan="11" class="empty">—</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- SYMBOLS -->
+<div class="panel" id="p-symbols">
+  <div class="card">
+    <div class="card-hdr"><h3>📈 Symbol Performance</h3></div>
+    <div class="card-body scroll-card" style="max-height:600px">
+      <table class="tbl"><thead><tr><th>Symbol</th><th>Wins</th><th>Losses</th><th>Win %</th><th>PnL</th><th>Bias</th><th>SL×</th><th>TP×</th></tr></thead>
+      <tbody id="sym-body"><tr><td colspan="8" class="empty">—</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div class="panel" id="p-settings">
+  <div class="grid2">
+    <div class="card">
+      <div class="card-hdr"><h3>⚙ Parameters</h3></div>
+      <div class="card-body" id="param-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px"></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr"><h3>📋 Strategy Rules</h3></div>
+      <div class="card-body" style="font-size:11px;line-height:2">
+        <p>✅ <b>CONSERVATIVE mode REMOVED</b> (9.1% WR → caused 83% of losses)</p>
+        <p>✅ <b>Trading window:</b> 19:00-00:59 UTC only (dead zone 20:00-23:00 blocked)</p>
+        <p>✅ <b>Tranche closing:</b> 40% at 15%, 30% at 20%, 30% at 25% (margin return)</p>
+        <p>✅ <b>Breakeven SL:</b> Move SL to entry once position is in profit</p>
+        <p>✅ <b>No exchange TP:</b> Positions managed programmatically — hold for max profit</p>
+        <p>✅ <b>BTC 4H macro gate:</b> Altcoin LONGs penalized when BTC bearish</p>
+        <p>✅ <b>Volume >1.3x gate:</b> Mandatory — no low-volume entries</p>
+        <p>✅ <b>RSI divergence:</b> +15 confidence on divergence setups</p>
+        <p>✅ <b>Session sizing:</b> +25% in 19:00-20:59 UTC window</p>
+        <p>✅ <b>Pyramid at +2.5%:</b> Raised from +0.8% (within noise range)</p>
+        <p>✅ <b>LTF veto:</b> Skip if 5m MACD + 3m cross both negative</p>
+        <p>✅ <b>Auto-blacklist:</b> 0% WR symbols excluded after ≥5 trades</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /body -->
+</div><!-- /layout -->
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const f=(v,d=2)=>v==null?'—':(+v).toFixed(d);
+const pnl=v=>{v=+v;return v>0?`<span class="pos">+$${f(v,4)}</span>`:v<0?`<span class="neg">-$${f(Math.abs(v),4)}</span>`:'$0.00'};
+const fDt=ts=>ts?new Date(ts*1e3).toLocaleString('en-GB',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+const fDr=s=>{if(!s)return'—';if(s<60)return s+'s';if(s<3600)return~~(s/60)+'m';return~~(s/3600)+'h '+~~(s%3600/60)+'m'};
+const sigTag=s=>s==='LONG'?'<span class="tag tag-g">LONG</span>':s==='SHORT'?'<span class="tag tag-r">SHORT</span>':'<span class="tag">HOLD</span>';
+const actTag=a=>a==='OPENED'?'<span class="tag tag-g">OPENED</span>':a==='LTF_VETO'?'<span class="tag tag-y">LTF_VETO</span>':a==='VOL_GATE'?'<span class="tag tag-y">VOL_GATE</span>':a?.startsWith('SKIP')?'<span class="tag tag-r">'+a+'</span>':'<span class="tag">'+a+'</span>';
+const outTag=o=>o==='WIN'?'<span class="tag tag-g">WIN</span>':o==='LOSS'?'<span class="tag tag-r">LOSS</span>':'<span class="tag tag-y">'+(o||'OPEN')+'</span>';
+
+let activeTab='overview';
+function tab(id,el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  $('p-'+id).classList.add('active');
+  activeTab=id;
+  refresh();
+}
+
+async function fetchJSON(url){try{const r=await fetch(url);return await r.json()}catch(e){return null}}
+async function forceWhaleUpdate(){
+  $('wh-updated').textContent='Updating...';
+  try{const r=await fetch('/api/mcp/force-whale-update',{method:'POST'});const d=await r.json();
+  $('wh-updated').textContent='Done!';setTimeout(refresh,1000);}catch(e){$('wh-updated').textContent='Error';}
+}
+
+async function refresh(){
+  const [st,sc,pos,wh]=await Promise.all([
+    fetchJSON('/api/status'),
+    fetchJSON('/api/scans'),
+    fetchJSON('/api/positions'),
+    fetchJSON('/api/whale'),
+  ]);
+  if(!st)return;
+
+  $('status-text').textContent=st.running?'Running':'Stopped';
+  $('pulse').style.background=st.running?'var(--green)':'var(--red)';
+  $('last-update').textContent=new Date().toLocaleTimeString();
+
+  // Overview
+  $('ov-bal').textContent='$'+f(st.balance,4);
+  $('ov-mode').textContent=st.mode+' · Ep'+st.epoch+' D'+st.day_in_epoch;
+  $('ov-target').textContent='$'+f(st.epoch_target,2);
+  const ah=st.ahead_pct||0;
+  $('ov-ahead').innerHTML=ah>=0?`<span class="pos">${f(ah,1)}% ahead</span>`:`<span class="neg">${f(ah,1)}% behind</span>`;
+  $('ov-wr').textContent=f(st.win_rate,1)+'%';
+  $('ov-trades').textContent=st.total_trades+' trades ('+st.wins+'W/'+st.losses+'L)';
+  $('ov-pnl').innerHTML=pnl(st.total_pnl);
+  $('ov-today').innerHTML='Today: '+pnl(st.today_pnl);
+  $('ov-open').textContent=st.open_positions;
+  $('ov-unr').innerHTML='Unr: '+pnl(st.unrealised_pnl);
+
+  // Positions
+  if(pos&&pos.positions){
+    const tb=$('ov-pos');
+    if(pos.positions.length===0){tb.innerHTML='<tr><td colspan="6" class="empty">No open positions</td></tr>';}
+    else{tb.innerHTML=pos.positions.map(p=>`<tr>
+      <td><b>${p.symbol}</b></td>
+      <td>${sigTag(p.side==='Buy'?'LONG':'SHORT')}</td>
+      <td>$${f(p.entry_price,4)}</td>
+      <td>$${f(p.current_price,4)}</td>
+      <td>${pnl(p.unrealised_pnl)}</td>
+      <td>${p.leverage||'—'}x</td>
+    </tr>`).join('');}
+  }
+
+  // Epochs
+  try{
+    const ep=await fetchJSON('/api/epochs');
+    if(ep&&ep.epochs){
+      $('ov-epochs').innerHTML=ep.epochs.map(e=>`<tr>
+        <td>${e.epoch_num}</td><td>$${f(e.start_bal,2)}</td><td>${e.end_bal?'$'+f(e.end_bal,2):'—'}</td>
+        <td>$${f(e.target_bal,2)}</td><td>${pnl(e.pnl_usdt)}</td><td>${f(e.win_rate,1)}%</td>
+        <td>${e.target_met?'✅':'⏳'}</td></tr>`).join('');
+    }
+  }catch(e){}
+
+  // Signals
+  if(sc&&sc.scans){
+    $('sig-regime').textContent=st.market_regime||'—';
+    $('sig-regime-lbl').textContent=st.regime_label||'—';
+    $('sig-cf').textContent=st.mode==='NORMAL'?'65':st.mode==='AGGRESSIVE'?'58':'50';
+    $('sig-mode').textContent=st.mode;
+    $('sig-window').textContent=st.trading_window||'—';
+    const fgs=sc.scans[0];
+    if(fgs){
+      $('sig-fg').textContent=fgs.fear_greed||'—';
+      $('sig-fgl').textContent=fgs.fg_label||'—';
+    }
+    $('sig-ts').textContent=sc.ts?fDt(sc.ts):'—';
+    const sb=$('sig-body');
+    if(sc.scans.length===0){sb.innerHTML='<tr><td colspan="8" class="empty">No scan results</td></tr>';}
+    else{sb.innerHTML=sc.scans.map(s=>`<tr>
+      <td><b>${s.symbol}</b></td>
+      <td>${sigTag(s.signal)}</td>
+      <td>${s.confidence||0}</td>
+      <td>${f(s.composite,3)}</td>
+      <td>${actTag(s.action)}</td>
+      <td>${s.volume_ok?'<span class="tag tag-g">✓</span>':'<span class="tag tag-r">✗</span>'}</td>
+      <td>${f(s.whale_score,2)}</td>
+      <td>${s.fear_greed||'—'}</td>
+    </tr>`).join('');}
+  }
+
+  // History
+  if(activeTab==='history'){
+    const h=await fetchJSON('/api/trades?hours=72');
+    if(h&&h.trades){
+      const hb=$('hist-body');
+      if(h.trades.length===0){hb.innerHTML='<tr><td colspan="9" class="empty">No trades</td></tr>';}
+      else{hb.innerHTML=h.trades.map(t=>`<tr>
+        <td>${fDt(t.ts_open)}</td><td><b>${t.symbol}</b></td><td>${t.side}</td>
+        <td>$${f(t.entry_price,4)}</td><td>${t.exit_price?'$'+f(t.exit_price,4):'—'}</td>
+        <td>${pnl(t.pnl_usdt)}</td><td>${outTag(t.outcome)}</td>
+        <td>${fDr(t.duration_s)}</td><td>${t.mode||'—'}</td>
+      </tr>`).join('');}
+    }
+  }
+
+  // Whale
+  if(wh){
+    const sm=wh.summary||{};
+    $('wh-bias').textContent=sm.market_bias||'—';
+    $('wh-bias').className='kv '+(sm.market_bias==='BULLISH'?'pos':sm.market_bias==='BEARISH'?'neg':'');
+    $('wh-bull').textContent=sm.bullish_symbols||0;
+    $('wh-bear').textContent=sm.bearish_symbols||0;
+    $('wh-count').textContent=sm.symbols_tracked||0;
+    $('wh-squeeze').textContent=(sm.short_squeezes||[]).join(', ')||'None';
+    $('wh-signals').textContent=sm.total_signals_hit||0;
+    if(sm.strongest_bull)$('wh-sbull').textContent=sm.strongest_bull[0]+' ('+f(sm.strongest_bull[1],2)+')';
+    if(sm.strongest_bear)$('wh-sbear').textContent=sm.strongest_bear[0]+' ('+f(sm.strongest_bear[1],2)+')';
+    const cs=wh.cache_stats||{};
+    if(cs.last_update_ago_sec>0){
+      const m=Math.floor(cs.last_update_ago_sec/60);
+      $('wh-updated').textContent=m<1?'Just now':m+'m ago';
+      $('wh-updated').style.color=m>30?'var(--red)':'var(--muted)';
+    }
+    // Opportunities table
+    const ops=wh.opportunities||[];
+    const wb=$('wh-body');
+    if(ops.length===0){wb.innerHTML='<tr><td colspan="10" class="empty">No whale signals detected yet</td></tr>';}
+    else{wb.innerHTML=ops.map(o=>`<tr>
+      <td><b>${o.symbol}</b></td>
+      <td><span style="display:inline-block;min-width:50px;padding:2px 6px;border-radius:3px;text-align:center;color:#fff;background:${o.score>0.3?'var(--green)':o.score<-0.3?'var(--red)':'#555'}">${f(o.score,3)}</span></td>
+      <td style="color:${o.bias==='BULLISH'?'var(--green)':o.bias==='BEARISH'?'var(--red)':'var(--muted)'}"><b>${o.bias}</b></td>
+      <td>${o.signals_hit}/6</td>
+      <td style="color:${o.oi_spike>3?'var(--green)':o.oi_spike<-3?'var(--red)':'inherit'}">${f(o.oi_spike,1)}%</td>
+      <td style="color:${o.funding_extreme?'var(--yellow)':'inherit'}">${f(o.funding,3)}%</td>
+      <td>${f(o.liq_net,1)}</td>
+      <td style="color:${o.ob_imb>0.15?'var(--green)':o.ob_imb<-0.15?'var(--red)':'inherit'}">${f(o.ob_imb,3)}</td>
+      <td>${f(o.ls_ratio,3)}</td>
+      <td>${o.vol_spike?'🔥 '+f(o.vol_ratio,1)+'x':f(o.vol_ratio,1)+'x'}</td>
+    </tr>`).join('');}
+    // All symbols table
+    const all=wh.all_symbols||[];
+    const ab=$('wh-all-body');
+    if(all.length===0){ab.innerHTML='<tr><td colspan="11" class="empty">No symbols tracked yet</td></tr>';}
+    else{ab.innerHTML=all.map(o=>{
+      const ageM=Math.floor(o.age_sec/60);
+      return `<tr style="opacity:${o.fresh?1:0.4}">
+      <td><b>${o.symbol}</b></td>
+      <td style="color:${o.score>0.2?'var(--green)':o.score<-0.2?'var(--red)':'inherit'}">${f(o.score,3)}</td>
+      <td>${o.bias}</td>
+      <td>${o.signals_hit}/6</td>
+      <td>${f(o.oi_spike,1)}%</td>
+      <td>${f(o.funding,3)}%</td>
+      <td>${f(o.liq_total,0)}</td>
+      <td>${f(o.ob_imb,3)}</td>
+      <td>${f(o.ls_ratio,3)}</td>
+      <td>${o.vol_spike?'🔥 '+f(o.vol_ratio,1)+'x':f(o.vol_ratio,1)+'x'}</td>
+      <td style="color:${ageM>30?'var(--red)':'var(--muted)'}">${ageM}m</td>
+    </tr>`}).join('');}
+  }
+
+  // Symbols
+  if(activeTab==='symbols'){
+    const sy=await fetchJSON('/api/symbols');
+    if(sy&&sy.symbols){
+      $('sym-body').innerHTML=sy.symbols.map(s=>`<tr>
+        <td><b>${s.symbol}</b></td><td>${s.wins}</td><td>${s.losses}</td>
+        <td>${f(s.win_rate,1)}%</td><td>${pnl(s.total_pnl)}</td>
+        <td>${f(s.learned_bias,2)}</td><td>${f(s.sl_mult,2)}</td><td>${f(s.tp_mult,2)}</td>
+      </tr>`).join('');
+    }
+  }
+
+  // Settings
+  if(activeTab==='settings'){
+    const pm=await fetchJSON('/api/params');
+    if(pm&&pm.params){
+      $('param-grid').innerHTML=Object.entries(pm.params).map(([k,v])=>
+        `<div style="color:var(--muted)">${k}</div><div style="font-weight:600">${v}</div>`
+      ).join('');
+    }
+  }
+}
+
+// Initial load + auto-refresh
+refresh();
+setInterval(refresh,15000);
+</script>
+</body>
+</html>
